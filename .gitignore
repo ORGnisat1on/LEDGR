@@ -11,3 +11,8 @@ coverage/
 data/
 artifacts/
 
+# Python bytecode / test cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
