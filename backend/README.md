@@ -28,6 +28,7 @@ mixer-address validation set (one address per line). Without it, the
 
 ```bash
 backend/.venv/Scripts/python backend/scripts/run_ingest.py      # R1/R2 artifacts
+backend/.venv/Scripts/python backend/scripts/sanity_check_subgraph.py  # R2 subgraph sanity check
 backend/.venv/Scripts/python backend/scripts/validate_rules.py  # R3 validation
 backend/.venv/Scripts/python backend/scripts/train_model.py     # R4 trained signal
 backend/.venv/Scripts/uvicorn ledgr.service:app --app-dir backend --port 8000
