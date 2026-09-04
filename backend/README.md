@@ -1,9 +1,9 @@
-# LEDGR Python backend (Phases R1–R4 of BACKEND_BUILD_PLAN.md)
+# LEDGR Python backend (Phases R1–R5 of BACKEND_BUILD_PLAN.md)
 
 Python pipeline: data ingestion → entity-safe split → graph construction →
-**rule-based signal (R3)** → **learned signal (R4)** → (small) FastAPI inference
-service. The Node `server.ts` keeps its API contract and will proxy trace/rules/
-score calls here (wired in Phase R7).
+**rule-based signal (R3)** → **learned signal (R4)** → **correlation (R5)** →
+(small) FastAPI inference service. The Node `server.ts` keeps its API contract
+and will proxy trace/rules/score/verdict calls here (wired in Phase R7).
 
 ## Setup
 
@@ -32,9 +32,10 @@ backend/.venv/Scripts/python backend/scripts/sanity_check_subgraph.py  # R2 subg
 backend/.venv/Scripts/python backend/scripts/validate_rules.py  # R3 validation
 backend/.venv/Scripts/python backend/scripts/train_model.py     # R4 trained signal
 backend/.venv/Scripts/uvicorn ledgr.service:app --app-dir backend --port 8000
-# POST /trace  {"address": "...", "hop_depth": 2}  -> subgraph + stats
-# POST /rules  {"address": "...", "hop_depth": 2}  -> per-heuristic rule signal
-# POST /score  {"address": "..."}                 -> learned-signal risk score
+# POST /trace   {"address": "...", "hop_depth": 2} -> subgraph + stats
+# POST /rules   {"address": "...", "hop_depth": 2} -> per-heuristic rule signal
+# POST /score   {"address": "..."}                -> learned-signal risk score
+# POST /verdict {"address": "...", "hop_depth": 2} -> confirmed/watch/none (R5)
 ```
 
 Rule validation writes `artifacts/rule_validation.json` (per-heuristic
@@ -58,6 +59,22 @@ The `POST /score` endpoint serves a real `P(illicit)` risk score per wallet
 feature set are honestly reported as `classified: false` (no risk is fabricated).
 The learned flag threshold (`LEARNED_FLAG_THRESHOLD = 0.5`) is documented in
 `ledgr/config.py` and passed to Phase R5's confirmed/watch correlation.
+
+## Correlation layer (Phase R5)
+
+`backend/ledgr/correlate.py` combines the two independently-validated signals —
+R3 rules and R4 learned — into a per-wallet verdict (METHODOLOGY.md §4):
+
+- **confirmed** — both signals flag the wallet (a strict subset of each
+  individually-flagged set),
+- **watch** — exactly one signal flags the wallet,
+- **none** — neither signal flags the wallet (never upgraded to a flag).
+
+`POST /verdict` returns the verdict with contributing-signal traceability
+(which rules fired, rule score, learned risk score, flag threshold), replacing
+the mock analyzer's always-`confirmed` verdict. A wallet with an out-of-dataset
+`classified: false` learned result is never treated as flagged by the learned
+signal, so it can only be watch-as-rule or none.
 
 ## Tests
 

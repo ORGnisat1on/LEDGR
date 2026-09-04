@@ -119,3 +119,46 @@ def test_score_endpoint_503_without_artifacts():
         assert r.status_code == 503
     finally:
         svc._MODEL, svc._FEATURES = prev_model, prev_feat
+
+
+def test_verdict_endpoint():
+    """Phase R5: /verdict combines rule + learned signals into confirmed/watch/none
+    with traceability, and can reach more than one verdict across wallets."""
+    import ledgr.service as svc
+    from ledgr.correlate import VERDICT_CONFIRMED, VERDICT_NONE, VERDICT_WATCH
+
+    from ledgr.entity_split import build_entities, split_entities
+    from ledgr.ingest import load_elliptic
+    from ledgr.learn import load_feature_lookup, load_learned_model, train_and_evaluate
+
+    # Ensure graph index is loaded
+    client = make_client()
+
+    # Train a tiny model + feature lookup so the learned signal is available.
+    tmp = BACKEND / "tests" / "fixtures" / "_r5tmp"
+    ds = load_elliptic(FIXTURE)
+    split_df = split_entities(build_entities(ds))
+    train_and_evaluate(ds, split_df, out_dir=tmp, n_estimators=20)
+    svc._MODEL = load_learned_model(tmp / "learned_model.joblib")
+    svc._FEATURES = load_feature_lookup(tmp / "feature_lookup.pkl")
+
+    verdicts = set()
+    for s in list(svc._G.nodes)[:40]:
+        r = client.post("/verdict", json={"address": s, "hop_depth": 2})
+        assert r.status_code == 200, f"{s}: {r.status_code}"
+        body = r.json()
+        assert body["verdict"] in (VERDICT_CONFIRMED, VERDICT_WATCH, VERDICT_NONE)
+        assert "contributing_signals" in body
+        verdicts.add(body["verdict"])
+
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+    assert verdicts, "expected at least one verdict computed"
+    # R5 exit criterion: verdicts vary honestly by wallet (not always 'confirmed')
+    assert not (verdicts == {VERDICT_CONFIRMED}), "must not be always-confirmed across wallets"
+
+
+def test_verdict_404_unknown_address():
+    client = make_client()
+    r = client.post("/verdict", json={"address": "wallet-not-in-graph", "hop_depth": 2})
+    assert r.status_code == 404

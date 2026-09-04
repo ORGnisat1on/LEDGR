@@ -5,6 +5,7 @@ Endpoints:
   POST /trace    -> {address (tx id or wallet), hop_depth} -> real local subgraph + stats
   POST /rules    -> {address, hop_depth} -> per-heuristic rule-based signal (Phase R3)
   POST /score    -> {address} -> learned-signal risk score (Phase R4, Module 3b)
+  POST /verdict  -> {address, hop_depth} -> confirmed/watch/none correlation (Phase R5)
 
 The Node backend (server.ts) will call these endpoints (Phase R7 wiring).
 """
@@ -16,6 +17,7 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from .correlate import correlate
 from .graph import load_graph_index, local_subgraph
 from .learn import load_feature_lookup, load_learned_model, predict_wallet
 from .rules import run_rules
@@ -109,3 +111,25 @@ def score(req: ScoreRequest) -> dict:
             detail="Learned signal unavailable. Run scripts/train_model.py first.",
         )
     return predict_wallet(_MODEL, _FEATURES, req.address)
+
+
+@app.post("/verdict")
+def verdict(req: TraceRequest) -> dict:
+    """Phase R5 correlation: combine R3 rule signal + R4 learned signal into a
+    confirmed/watch/none verdict (METHODOLOGY.md §4), with contributing-signal
+    traceability. Replaces the always-`confirmed` mock verdict."""
+    if _G is None:
+        raise HTTPException(status_code=503, detail="Graph index unavailable. Run scripts/run_ingest.py.")
+    if _MODEL is None or _FEATURES is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Learned signal unavailable. Run scripts/train_model.py first.",
+        )
+    try:
+        rules_out = run_rules(_G, req.address, hop_depth=req.hop_depth)
+        learned_out = predict_wallet(_MODEL, _FEATURES, req.address)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return correlate(rules_out, learned_out)
