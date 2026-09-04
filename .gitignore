@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# LEDGR python pipeline (dataset home, stack-agnostic)
+data/
+artifacts/
+

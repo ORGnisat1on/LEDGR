@@ -8,7 +8,7 @@ One-page orientation for any agent/session picking up this project cold. Keep th
 
 **LEDGR** — SIH26183, "Real-Time Identification of Fraud-Linked Cryptocurrency Exchanges from Victim-Reported Suspect Wallet Addresses," for Ministry of Home Affairs / I4C. Takes a victim-reported Bitcoin wallet address, traces its transaction graph, flags laundering-pattern activity via two independent signals, and surfaces the likely destination exchange/VASP cluster with a standardized investigation report.
 
-**Deadline:** Sept 20 2026. **Full doc set:** `README.md`, `SCOPE.md`, `ARCHITECTURE.md`, `DATA.md`, `METHODOLOGY.md`, `ROADMAP.md` (original plan), `BACKEND_BUILD_PLAN.md` (current from-here plan), `PHASE_LOG.md` (history).
+**Deadline:**  **Full doc set:** `README.md`, `SCOPE.md`, `ARCHITECTURE.md`, `DATA.md`, `METHODOLOGY.md`, `ROADMAP.md` (original plan), `BACKEND_BUILD_PLAN.md` (current from-here plan), `PHASE_LOG.md` (history).
 
 ## Core design decisions (non-negotiable, don't relitigate these)
 
@@ -25,7 +25,9 @@ One-page orientation for any agent/session picking up this project cold. Keep th
 
 **Mock, not yet real:** the entire analytical engine. `ForensicEngine`/`analyzer.ts` replays canned cases or fabricates a trace from a hash of the address; every verdict is hardcoded `confirmed` with fixed scores; `hopDepth` is ignored; no Elliptic ingestion, entity split, real graph construction, real heuristics, trained model, or real clustering exists yet. Production build (`npm start`) also currently crashes.
 
-**We are building the real backend now**, per `BACKEND_BUILD_PLAN.md`, replacing the mock incrementally behind the existing API contract (frontend shouldn't need to change). Architecture: Python (NetworkX/PyG, entity split, RF baseline, heuristics) as an offline pipeline + small FastAPI inference service, called by the existing Node backend.
+**Note (2026-09-04):** the Python backend was built (R1+R2), deleted at user direction, then rebuilt as a prerequisite of Phase R3 the same day (the plan's hard gates require R1's split before signal work). Current state: `backend/` contains the R1 ingestion + entity-safe split + no-leakage verification, R2 graph construction (hop_depth enforced, pre-indexed `graph_index.pkl`), **and the complete R3 rule-based signal**: peel-chain / rapid fan-out / mixer-adjacency heuristics with per-rule auditable evidence, weighted `rule_score` (40/30/30, tunable via `ledgr/config.py` + env), and `rule_flag` tiers (high/medium/low/none). Independent validation (`backend/scripts/validate_rules.py` → `artifacts/rule_validation.json`) passes all known-pattern cases and all false-positive checks (high-volume merchant, isolated wallet, wallet far from mixers stay unflagged — the old mock flagged the genesis address "confirmed"; that failure mode is gone). FastAPI exposes `POST /rules` alongside `POST /trace`; 29 pytest tests pass; `/rules` verified live.
+
+**Still mock/missing:** frontend still calls the `ForensicEngine` mock (Node→FastAPI wiring is R7). No learned signal (R4), correlation (R5), clustering (R6). Mixer list is a format placeholder (`data/mixers.example.txt` → copy to `data/mixers.txt` and source real addresses per SCOPE.md). Real Elliptic CSVs still not in `data/raw/` — dataset-scale validation of the heuristics pending Kaggle credentials. Production build still crashes (R7).
 
 ## Known traps (don't repeat these)
 

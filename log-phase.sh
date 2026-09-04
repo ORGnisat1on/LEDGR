@@ -19,7 +19,12 @@ SUMMARY="${3:?one-line summary required}"
 REMAINING="${4:-none noted}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="${SCRIPT_DIR}/../PHASE_LOG.md"
+# Works whether the script lives at the repo root or in scripts/
+if [ "$(basename "$SCRIPT_DIR")" = "scripts" ]; then
+  LOG_FILE="${SCRIPT_DIR}/../PHASE_LOG.md"
+else
+  LOG_FILE="${SCRIPT_DIR}/PHASE_LOG.md"
+fi
 TIMESTAMP="$(date -u +"%Y-%m-%d %H:%M UTC")"
 
 if [ ! -f "$LOG_FILE" ]; then
