@@ -72,3 +72,50 @@ def test_trace_invalid_hop_422():
     client = make_client()
     r = client.post("/trace", json={"address": "tx000000", "hop_depth": 0})
     assert r.status_code == 422
+
+
+def test_score_endpoint_learned_signal():
+    """Phase R4: /score returns a real per-wallet risk score, not a hardcoded value."""
+    import numpy as np
+
+    from ledgr.entity_split import build_entities, split_entities
+    from ledgr.ingest import load_elliptic
+    from ledgr.learn import load_feature_lookup, load_learned_model, train_and_evaluate
+    import ledgr.service as svc
+
+    ds = load_elliptic(FIXTURE)
+    split_df = split_entities(build_entities(ds))
+    tmp = BACKEND / "tests" / "fixtures" / "_r4tmp"
+    train_and_evaluate(ds, split_df, out_dir=tmp, n_estimators=20)
+    svc._MODEL = load_learned_model(tmp / "learned_model.joblib")
+    svc._FEATURES = load_feature_lookup(tmp / "feature_lookup.pkl")
+
+    client = TestClient(svc.app)
+    known = str(ds.tx_ids[0])
+    r = client.post("/score", json={"address": known})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["classified"] is True
+    assert 0.0 <= body["risk_score"] <= 1.0
+    assert body["prediction"] in ("illicit", "licit")
+
+    r2 = client.post("/score", json={"address": "wallet-not-in-dataset"})
+    assert r2.status_code == 200
+    assert r2.json()["classified"] is False
+
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_score_endpoint_503_without_artifacts():
+    """Without a trained model loaded, /score must fail loudly (503), never fabricate."""
+    import ledgr.service as svc
+
+    prev_model, prev_feat = svc._MODEL, svc._FEATURES
+    svc._MODEL, svc._FEATURES = None, None
+    try:
+        client = TestClient(svc.app)
+        r = client.post("/score", json={"address": "anything"})
+        assert r.status_code == 503
+    finally:
+        svc._MODEL, svc._FEATURES = prev_model, prev_feat

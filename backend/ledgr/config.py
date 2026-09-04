@@ -77,3 +77,26 @@ def rule_params() -> dict:
         "rule_weights": dict(RULE_WEIGHTS),
         "rule_flag_thresholds": dict(RULE_FLAG_THRESHOLDS),
     }
+
+
+# --- Phase R4: learned signal (random-forest baseline, ARCHITECTURE.md Module 3b) ---
+# Fixed seed so the model is reproducible and auditable (logged with every run).
+MODEL_SEED = 42
+# Random-forest tree count for the committed MVP baseline (ROADMAP.md Phase 4
+# decision). Documented, fixed, not tuned to inflate metrics on this dataset.
+RF_N_ESTIMATORS = 200
+# Learned-signal flag threshold: risk score (P(illicit)) at or above this => the
+# learned signal flags the wallet. This is the handoff to the correlation layer
+# (Phase R5 confirmed/watch); documented here and in artifacts/model_eval.json,
+# never left as an unnamed cutoff (METHODOLOGY.md §4).
+LEARNED_FLAG_THRESHOLD = 0.5
+# Artifact filenames for the trained model and the feature lookup it needs at
+# query time (the pre-indexed graph stores only label + time_step, not features).
+LEARNED_MODEL_FILE = "learned_model.joblib"
+FEATURE_LOOKUP_FILE = "feature_lookup.pkl"
+
+
+def model_eval_report(out_dir: Path | None = None) -> Path:
+    """Path to the R4 evaluation report (metrics logged per METHODOLOGY.md §2)."""
+    base = Path(out_dir) if out_dir else artifacts_dir()
+    return base / "model_eval.json"
