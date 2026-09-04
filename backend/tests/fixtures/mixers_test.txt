@@ -1,0 +1,6 @@
+# synthetic test mixer list — NOT real addresses
+tx000000
+tx000001
+tx000002
+tx000003
+tx000004

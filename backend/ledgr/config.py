@@ -1,0 +1,79 @@
+"""Central configuration for the LEDGR Python pipeline. All thresholds that are
+decisions (hub exclusion, split ratio, seed, rule weights) live here so they are
+logged with every run rather than buried in code."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+# Repo root = backend/.. (this file is backend/ledgr/config.py)
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+REPO_ROOT = BACKEND_DIR.parent
+
+# Where the user drops the raw Kaggle CSVs (Elliptic / Elliptic++)
+DEFAULT_RAW_DATA_DIR = REPO_ROOT / "data" / "raw"
+# Where normalized artifacts, splits, graph index, and verification logs are written
+DEFAULT_ARTIFACTS_DIR = REPO_ROOT / "artifacts"
+
+# --- METHODOLOGY.md §1 binding parameters (logged on every split run) ---
+# High-degree hub addresses (major exchange hot wallets) are excluded from the
+# component-forming step so one hub cannot merge thousands of unrelated
+# entities into a single giant component. Degree above this threshold => hub.
+HUB_DEGREE_THRESHOLD = 50
+# Entity-level train/test split ratio (METHODOLOGY.md §1 step 2: 70/30 or 80/20)
+TRAIN_FRACTION = 0.8
+# Fixed seed so the split is reproducible and auditable
+SPLIT_SEED = 42
+
+# Label encoding used everywhere downstream
+LABEL_ILlicit = 1  # noqa: N816 — kept lowercase-ish for grep-ability
+LABEL_LICIT = 0
+LABEL_UNKNOWN = -1
+
+RAW_LABEL_MAP = {"1": LABEL_ILlicit, "2": LABEL_LICIT, "unknown": LABEL_UNKNOWN}
+
+# --- Phase R3: rule-based signal parameters (logged with every validation run) ---
+# Peel chain: successive nodes each forwarding to exactly one next node
+PEEL_CHAIN_MIN_HOPS = 3
+PEEL_CHAIN_MAX_TIME_GAP = 1  # consecutive chain edges may span at most N time steps
+# Rapid fan-out: few funding inputs, many outputs, tight time window
+FANOUT_MIN_OUT = 5
+FANOUT_MAX_IN = 2
+FANOUT_TIME_WINDOW = 2
+# Mixer adjacency: how many hops from a known mixer address still counts as adjacent
+MIXER_MAX_HOPS = 2
+# Auditable rule weights -> composite rule_score (sum of fired weights, 0..100)
+RULE_WEIGHTS = {"peel_chain": 40, "rapid_fan_out": 30, "mixer_adjacent": 30}
+# rule_flag tiers from rule_score
+RULE_FLAG_THRESHOLDS = {"high": 60, "medium": 30}  # >0 below medium => "low", 0 => "none"
+
+# Mixer-address validation set: one address per line, '#'-comments allowed.
+# Not committed with fabricated entries — must be sourced (SCOPE.md / DATA.md).
+MIXER_LIST_FILE = REPO_ROOT / "data" / "mixers.txt"
+
+# Optional: per-rule tuning overrides via env (kept explicit, never magic numbers)
+def _env_int(name: str, default: int) -> int:
+    return int(os.environ.get(name, default))
+
+
+def data_dir() -> Path:
+    return Path(os.environ.get("LEDGR_DATA_DIR", DEFAULT_RAW_DATA_DIR))
+
+
+def artifacts_dir() -> Path:
+    return Path(os.environ.get("LEDGR_ARTIFACTS_DIR", DEFAULT_ARTIFACTS_DIR))
+
+
+def rule_params() -> dict:
+    """Current rule parameters — included in every rule-engine output for auditability."""
+    return {
+        "peel_chain_min_hops": _env_int("LEDGR_PEEL_MIN_HOPS", PEEL_CHAIN_MIN_HOPS),
+        "peel_chain_max_time_gap": PEEL_CHAIN_MAX_TIME_GAP,
+        "fanout_min_out": _env_int("LEDGR_FANOUT_MIN_OUT", FANOUT_MIN_OUT),
+        "fanout_max_in": FANOUT_MAX_IN,
+        "fanout_time_window": FANOUT_TIME_WINDOW,
+        "mixer_max_hops": _env_int("LEDGR_MIXER_MAX_HOPS", MIXER_MAX_HOPS),
+        "rule_weights": dict(RULE_WEIGHTS),
+        "rule_flag_thresholds": dict(RULE_FLAG_THRESHOLDS),
+    }
