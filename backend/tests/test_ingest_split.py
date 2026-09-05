@@ -36,12 +36,17 @@ def test_entity_split_is_leakage_free(dataset, tmp_path, monkeypatch):
     """METHODOLOGY §1: no tx or entity may appear in both train and test."""
     monkeypatch.setattr("ledgr.entity_split.artifacts_dir", lambda: tmp_path)
     ents = build_entities(dataset)
-    split_df = split_entities(ents)
+    split_df = split_entities(dataset, ents)
     train = set(split_df.loc[split_df["split"] == "train", "tx_id"])
     test = set(split_df.loc[split_df["split"] == "test", "tx_id"])
     assert not (train & test), "tx id leaked across split"
-    report = verify_no_leakage(dataset, split_df)
+    # require_span_zero=False: the synthetic fixture is a random graph whose
+    # components legitimately span multiple time steps; only the no-leakage
+    # mechanics are under test here. Span-0 is strictly enforced (default) on
+    # real pipeline runs (scripts/train_model.py) — see METHODOLOGY.md §1 step 2.
+    report = verify_no_leakage(dataset, split_df, require_span_zero=False)
     assert report["leakage_free"] is True
+    assert "entity_time_span_violations" in report  # span audit logged on every run
     assert (tmp_path / "split_verification.json").exists()
 
 
@@ -57,8 +62,8 @@ def test_hub_safeguard(dataset, tmp_path, monkeypatch):
 
 def test_split_reproducible(dataset):
     ents = build_entities(dataset)
-    s1 = split_entities(ents)
-    s2 = split_entities(ents)
+    s1 = split_entities(dataset, ents)
+    s2 = split_entities(dataset, ents)
     pd.testing.assert_frame_equal(s1, s2)
 
 

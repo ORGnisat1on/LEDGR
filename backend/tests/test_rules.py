@@ -23,10 +23,14 @@ def chain_graph(length: int) -> nx.DiGraph:
 
 
 def fanout_graph() -> nx.DiGraph:
+    """11 outputs — must stay >= the tuned FANOUT_MIN_OUT (10, ledgr/config.py) so
+    the composite run_rules test exercises the fan-out rule at production params.
+    Mirrors scripts/validate_rules.py's corrected fixture. Do not reduce the
+    output count without re-checking config: this diverged silently once already."""
     G = nx.DiGraph()
     G.add_node("src", label=-1, time_step=5)
     G.add_node("burst", label=-1, time_step=6)
-    for i in range(8):
+    for i in range(11):
         G.add_node(f"out{i}", label=-1, time_step=7)
         G.add_edge("burst", f"out{i}")
     G.add_edge("src", "burst")
@@ -70,12 +74,12 @@ def test_fan_out_detected():
     G = fanout_graph()
     ev = detect_rapid_fan_out(G, min_out=5, max_in=2, window=2)
     assert "burst" in ev
-    assert ev["burst"]["out_degree"] == 8
+    assert ev["burst"]["out_degree"] == 11
 
 
 def test_fan_out_spread_over_time_not_flagged():
     G = fanout_graph()
-    for i in range(8):  # outputs spread over 20 steps — not a burst
+    for i in range(11):  # outputs spread over 30 steps — not a burst
         G.nodes[f"out{i}"]["time_step"] = 7 + i * 3
     ev = detect_rapid_fan_out(G, min_out=5, max_in=2, window=2)
     assert "burst" not in ev

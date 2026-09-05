@@ -29,8 +29,10 @@ N_FEATURES = 166  # feature columns after tx id (matches load_elliptic / ingest.
 @pytest.fixture(scope="module")
 def split_ds():
     ds = load_elliptic(FIXTURE)
-    split_df = split_entities(build_entities(ds))
-    assert verify_no_leakage(ds, split_df)["leakage_free"]
+    split_df = split_entities(ds, build_entities(ds))
+    # require_span_zero=False: synthetic random fixture legitimately spans time
+    # steps; span-0 is strictly enforced on real pipeline runs (METHODOLOGY §1).
+    assert verify_no_leakage(ds, split_df, require_span_zero=False)["leakage_free"]
     return ds, split_df
 
 
