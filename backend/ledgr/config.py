@@ -100,3 +100,15 @@ def model_eval_report(out_dir: Path | None = None) -> Path:
     """Path to the R4 evaluation report (metrics logged per METHODOLOGY.md §2)."""
     base = Path(out_dir) if out_dir else artifacts_dir()
     return base / "model_eval.json"
+
+
+# --- Phase R6: clustering / attribution (ARCHITECTURE.md Module 5) ---
+# Supplementary named-exchange tagging (hot-wallet lists, community tagging).
+# Format: data/exchanges.example.txt. Sourced entries only — never fabricated
+# (SCOPE.md / DATA.md). Matched attribution is tagged `supplementary-source`
+# and kept visibly separate from `elliptic-derived` clustering.
+EXCHANGE_LIST_FILE = REPO_ROOT / "data" / "exchanges.txt"
+CLUSTER_REPORT_FILE = "clusters.json"
+# Max member wallets listed per cluster in the report (full membership is the
+# entity_id grouping; the sample keeps the API payload bounded).
+CLUSTER_MEMBER_SAMPLE = 10

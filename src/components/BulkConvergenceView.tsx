@@ -1,7 +1,61 @@
 import React from 'react';
-import { X, GitMerge, ShieldAlert, ArrowRight, Building2, Download, Copy, Check, Users } from 'lucide-react';
+import { X, GitMerge, ShieldAlert, Building2, Database } from 'lucide-react';
 import { CONVERGENCE_CLUSTERS } from '../data/mockCases';
-import { ConvergenceCluster } from '../types';
+import { ConfidenceTier } from '../types';
+
+/** Real cluster row served by the Python pipeline (Phase R6). */
+interface PipelineCluster {
+  cluster_id: string;
+  confidence_tier: 'elliptic-derived' | 'supplementary-source';
+  n_wallets: number;
+  label_counts: { illicit: number; licit: number; unknown: number };
+  illicit_fraction: number;
+  members_sample: string[];
+  attribution: {
+    name: string;
+    category: string;
+    confidence_tier: ConfidenceTier;
+    source_name: string;
+    jurisdiction?: string | null;
+  } | null;
+  verdict_counts?: { confirmed: number; watch: number; none: number };
+}
+
+interface ClustersPayload {
+  source: 'pipeline' | 'fallback';
+  available: boolean;
+  note?: string;
+  report?: {
+    n_clusters: number;
+    n_wallets: number;
+    exchange_list_loaded: boolean;
+    clusters: PipelineCluster[];
+    supplementary_matches: { cluster_id: string; name: string; source: string }[];
+  };
+}
+
+const TIER_STYLES: Record<ConfidenceTier, { label: string; badge: string; dot: string }> = {
+  'elliptic-derived': {
+    label: 'elliptic-derived',
+    badge: 'text-teal-300 bg-teal-950/50 border-teal-700/50',
+    dot: 'bg-teal-400',
+  },
+  'supplementary-source': {
+    label: 'supplementary-source',
+    badge: 'text-amber-300 bg-amber-950/50 border-amber-700/50',
+    dot: 'bg-amber-400',
+  },
+};
+
+const TierBadge: React.FC<{ tier: ConfidenceTier }> = ({ tier }) => {
+  const s = TIER_STYLES[tier] ?? TIER_STYLES['elliptic-derived'];
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold font-mono px-2 py-0.5 rounded-md border ${s.badge}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
+      {s.label}
+    </span>
+  );
+};
 
 interface BulkConvergenceViewProps {
   isOpen: boolean;
@@ -14,16 +68,26 @@ export const BulkConvergenceView: React.FC<BulkConvergenceViewProps> = ({
   onClose,
   onTraceAddress
 }) => {
-  const [copied, setCopied] = React.useState(false);
+  const [payload, setPayload] = React.useState<ClustersPayload | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    setLoading(true);
+    fetch('/api/clusters')
+      .then((r) => r.json())
+      .then((data: ClustersPayload) => { if (!cancelled) setPayload(data); })
+      .catch(() => { if (!cancelled) setPayload({ source: 'fallback', available: false, note: 'Clustering service unreachable — showing labeled offline mock data.' }); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [isOpen]);
+
   const cluster = CONVERGENCE_CLUSTERS[0];
+  const isPipeline = payload?.source === 'pipeline' && !!payload.report;
+  const report = payload?.report;
 
   if (!isOpen) return null;
-
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
@@ -36,7 +100,7 @@ export const BulkConvergenceView: React.FC<BulkConvergenceViewProps> = ({
             </div>
             <div>
               <h2 className="text-base font-bold text-white tracking-tight">
-                Syndicate Convergence
+                Wallet Clustering &amp; Attribution
               </h2>
             </div>
           </div>
@@ -49,113 +113,126 @@ export const BulkConvergenceView: React.FC<BulkConvergenceViewProps> = ({
         </div>
 
         <div className="p-5 space-y-4 max-h-[520px] overflow-y-auto text-zinc-300">
-          {/* Syndicate Banner */}
-          <div className="p-4 rounded-xl bg-rose-950/30 border border-rose-800/60 space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
-                <h3 className="text-sm font-bold text-rose-300">
-                  Detected Cross-State Syndicate Convergence Hub
-                </h3>
-              </div>
-              <span className="text-xs font-bold text-rose-300 font-mono bg-rose-900/40 px-2.5 py-0.5 rounded-md border border-rose-700/50">
-                {cluster.convergingCases.length} VICTIMS MERGED
-              </span>
+          {/* Data-source banner: real pipeline vs explicitly-labeled mock */}
+          {loading && (
+            <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400 flex items-center gap-2">
+              <Database className="w-4 h-4 animate-pulse" /> Loading cluster report…
             </div>
-            <p className="text-xs text-zinc-300 leading-relaxed">
-              {cluster.syndicateProfile}
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 text-xs">
-              <div className="p-2.5 bg-[#121217] rounded-xl border border-zinc-800">
-                <span className="text-[10px] text-zinc-400 block">Total Aggregate Defrauded (Merged):</span>
-                <span className="text-base font-bold text-white font-mono">
-                  ₹{cluster.totalCombinedLossInr.toLocaleString('en-IN')}
-                </span>
-                <span className="text-xs font-mono text-zinc-400 ml-1">({cluster.totalCombinedLossBtc} BTC)</span>
+          )}
+          {!loading && payload && !isPipeline && (
+            <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/60 text-xs text-amber-300 space-y-1">
+              <div className="font-bold uppercase tracking-wider flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4" /> Offline mock data — not live pipeline output
               </div>
-              <div className="p-2.5 bg-[#121217] rounded-xl border border-zinc-800">
-                <span className="text-[10px] text-zinc-400 block">Shared Destination VASP Deposit:</span>
-                <div className="flex items-center justify-between gap-1 font-mono text-[11px] text-indigo-400 truncate">
-                  <span className="truncate">{cluster.clusterDepositAddress}</span>
-                  <button
-                    onClick={() => handleCopy(cluster.clusterDepositAddress)}
-                    className="p-1 hover:bg-zinc-800 rounded-md text-zinc-400 hover:text-white shrink-0 cursor-pointer"
-                  >
-                    {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                  </button>
+              <p className="text-amber-200/80">{payload.note}</p>
+              <p className="text-amber-200/60">
+                Run <code className="font-mono">backend/scripts/build_clusters.py</code> and start the
+                Python service to see real Elliptic-derived clusters here.
+              </p>
+            </div>
+          )}
+          {!loading && isPipeline && report && (
+            <div className="p-3 rounded-xl bg-teal-950/30 border border-teal-800/60 text-xs text-teal-300 space-y-1">
+              <div className="font-bold uppercase tracking-wider flex items-center gap-2">
+                <Database className="w-4 h-4" /> Live pipeline output — Elliptic-derived clustering
+              </div>
+              <p className="text-teal-200/80">
+                {report.n_clusters} clusters over {report.n_wallets} wallets. Supplementary
+                named-exchange attribution is a separate, lower-confidence source
+                {report.exchange_list_loaded ? '' : ' (no sourced exchange list loaded — none attached)'}.
+              </p>
+            </div>
+          )}
+
+          {/* REAL pipeline clusters */}
+          {!loading && isPipeline && report && report.clusters.map((c) => (
+            <div key={c.cluster_id} className="p-4 rounded-xl bg-[#121217] border border-zinc-800/80 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-zinc-400">{c.cluster_id}</span>
+                  <TierBadge tier={c.confidence_tier} />
                 </div>
-                <span className="text-[10px] text-zinc-400 block mt-0.5">Entity: <strong className="text-zinc-200">{cluster.name}</strong></span>
+                <span className="text-[10px] font-mono text-zinc-500">{c.n_wallets} wallets</span>
               </div>
-            </div>
-          </div>
 
-          {/* Visual Convergence Funnel Flow */}
-          <div className="p-4 bg-[#121217] rounded-xl border border-zinc-800/80 space-y-3">
-            <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-indigo-400" />
-              Independent Complainant Inflow Traces
-            </h4>
-
-            <div className="grid grid-cols-1 gap-2.5">
-              {cluster.convergingCases.map((c, idx) => (
-                <div
-                  key={c.ackNumber}
-                  className="p-3 bg-[#16161d] rounded-xl border border-zinc-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:border-indigo-500/50 transition-colors"
-                >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-white">{c.victimName}</span>
-                      <span className="text-[10px] bg-zinc-800 text-zinc-300 px-2 py-0.2 rounded-md font-medium">
-                        {c.state}
-                      </span>
-                      <span className="text-[10px] font-mono text-indigo-300 bg-indigo-950/50 px-1.5 py-0.2 rounded-md border border-indigo-800/40">
-                        {c.ackNumber}
-                      </span>
-                    </div>
-                    <div className="text-zinc-400 text-[11px]">
-                      Modus Operandi: <strong className="text-zinc-300">{c.scamType}</strong>
-                    </div>
-                    <div className="font-mono text-[10px] text-zinc-500">
-                      Initial Suspect Wallet: {c.initialSuspectAddress}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-4 sm:text-right shrink-0">
+              {c.attribution && (
+                <div className="p-2.5 rounded-lg bg-indigo-950/50 border border-indigo-800/50 text-xs flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2">
+                    <Building2 className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
                     <div>
-                      <div className="font-bold text-white font-mono">
-                        ₹{c.amountInr.toLocaleString('en-IN')}
-                      </div>
-                      <div className="text-[10px] text-zinc-400 font-mono">
-                        {c.amountBtc} BTC • {c.hopsToConvergence} hops to hub
+                      <div className="font-bold text-white">{c.attribution.name}</div>
+                      <div className="text-[10px] font-mono text-zinc-400">
+                        source: {c.attribution.source_name}
+                        {c.attribution.jurisdiction ? ` • ${c.attribution.jurisdiction}` : ''}
                       </div>
                     </div>
-                    <ArrowRight className="w-4 h-4 text-indigo-400 hidden sm:block" />
                   </div>
+                  <TierBadge tier={c.attribution.confidence_tier} />
                 </div>
-              ))}
-            </div>
+              )}
 
-            {/* Destination node */}
-            <div className="p-3 bg-indigo-950/60 border border-indigo-800/60 text-white rounded-xl flex items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2.5">
-                <Building2 className="w-5 h-5 text-amber-400 shrink-0" />
-                <div>
-                  <div className="font-bold text-white text-sm">
-                    Converged Exchange Cluster: {cluster.name}
-                  </div>
-                  <div className="text-indigo-300 text-[11px] font-mono truncate max-w-md">
-                    Deposit Sub-Account: {cluster.clusterDepositAddress}
-                  </div>
+              <div className="grid grid-cols-3 gap-2 text-center text-[11px]">
+                <div className="p-2 rounded-lg bg-rose-950/30 border border-rose-900/50">
+                  <div className="font-bold text-rose-300 font-mono">{c.label_counts.illicit}</div>
+                  <div className="text-[10px] text-zinc-500">illicit</div>
+                </div>
+                <div className="p-2 rounded-lg bg-emerald-950/30 border border-emerald-900/50">
+                  <div className="font-bold text-emerald-300 font-mono">{c.label_counts.licit}</div>
+                  <div className="text-[10px] text-zinc-500">licit</div>
+                </div>
+                <div className="p-2 rounded-lg bg-zinc-900 border border-zinc-800">
+                  <div className="font-bold text-zinc-300 font-mono">{c.label_counts.unknown}</div>
+                  <div className="text-[10px] text-zinc-500">unknown</div>
                 </div>
               </div>
-              <div className="text-right shrink-0">
-                <span className="text-[10px] text-indigo-300 block uppercase font-medium">Syndicate Total</span>
-                <span className="text-sm font-bold text-amber-400 font-mono">
-                  {cluster.totalCombinedLossBtc} BTC
+
+              {c.verdict_counts && (
+                <div className="flex gap-2 text-[10px] font-mono text-zinc-400">
+                  <span className="px-2 py-0.5 rounded bg-rose-950/40 text-rose-300">confirmed: {c.verdict_counts.confirmed}</span>
+                  <span className="px-2 py-0.5 rounded bg-amber-950/40 text-amber-300">watch: {c.verdict_counts.watch}</span>
+                  <span className="px-2 py-0.5 rounded bg-zinc-900 text-zinc-400">none: {c.verdict_counts.none}</span>
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">Member wallets</div>
+                {c.members_sample.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => onTraceAddress(m)}
+                    className="w-full text-left font-mono text-[10px] text-indigo-300 hover:text-indigo-200 hover:bg-indigo-950/40 rounded px-2 py-1 transition-colors cursor-pointer truncate"
+                  >
+                    {m}
+                  </button>
+                ))}
+                {c.n_wallets > c.members_sample.length && (
+                  <div className="text-[10px] text-zinc-600 font-mono">
+                    +{c.n_wallets - c.members_sample.length} more wallets in this cluster
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {/* MOCK fallback (only when the pipeline is unavailable) */}
+          {!loading && payload && !isPipeline && (
+            <div className="p-4 rounded-xl bg-rose-950/30 border border-rose-800/60 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
+                  <h3 className="text-sm font-bold text-rose-300">
+                    Detected Cross-State Syndicate Convergence Hub
+                  </h3>
+                </div>
+                <span className="text-xs font-bold text-rose-300 font-mono bg-rose-900/40 px-2.5 py-0.5 rounded-md border border-rose-700/50">
+                  {cluster.convergingCases.length} VICTIMS MERGED
                 </span>
               </div>
+              <p className="text-xs text-zinc-300 leading-relaxed">
+                {cluster.syndicateProfile}
+              </p>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

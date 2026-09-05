@@ -1,0 +1,17 @@
+# LEDGR supplementary named-exchange tagging — example format
+#
+# Copy this file to data/exchanges.txt and replace the placeholder entries with
+# real, SOURCED named-exchange hot-wallet / deposit-cluster tagging (e.g. from
+# public exchange hot-wallet disclosures or reputable open-source wallet-tagging
+# repositories — record the source per entry). One entry per line, CSV:
+#
+#   address,name,source,jurisdiction
+#
+# Lines starting with '#' are comments. These placeholder ids are NOT real
+# exchange addresses — the engine only matches entries whose address exists in
+# the loaded graph. Matched attribution is tagged `supplementary-source` and is
+# kept visibly separate from `elliptic-derived` clustering (R6).
+#
+# Provenance rules (SCOPE.md / DATA.md): every real entry must carry a source.
+# Entries without a source are recorded as "unsourced" and should not be used
+# for any enforcement-adjacent claim.

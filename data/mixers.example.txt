@@ -1,0 +1,12 @@
+# LEDGR mixer-address validation set — example format
+#
+# Copy this file to data/mixers.txt and replace the placeholder entries with a
+# real, sourced validation set (SCOPE.md: Bitcoin mixer ground truth is thin —
+# start sourcing early). One address per line. Lines starting with '#' are
+# comments. These placeholder ids are NOT real mixer addresses — the engine
+# only matches nodes that exist in the loaded graph.
+#
+# Sources to consider (document per-address provenance when you add real ones):
+#   - academic/publications publishing identified mixer clusters
+#   - court filings / law-enforcement seizure announcements
+#   - reputable open-source wallet-tagging repositories (record the commit)

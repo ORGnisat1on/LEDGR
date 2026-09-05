@@ -71,6 +71,33 @@ Keep tone professional, strictly objective, and direct.`;
     }
   });
 
+  // Phase R6: real cluster/attribution output from the Python pipeline (R6).
+  // Falls back explicitly (never silently) when the Python service is down.
+  app.get('/api/clusters', async (_req, res) => {
+    const pyBase = process.env.LEDGR_SERVICE_URL || 'http://localhost:8000';
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const response = await fetch(`${pyBase}/clusters`, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (response.ok) {
+        const report = await response.json();
+        return res.json({ source: 'pipeline', available: true, report });
+      }
+      return res.json({
+        source: 'fallback',
+        available: false,
+        note: `Clustering service responded ${response.status} — showing labeled offline mock data.`,
+      });
+    } catch {
+      return res.json({
+        source: 'fallback',
+        available: false,
+        note: 'Python clustering service unavailable — showing labeled offline mock data.',
+      });
+    }
+  });
+
   // Live mempool query proxy (for real-time unconfirmed tx checking with fallback)
   app.get('/api/mempool/address/:address', async (req, res) => {
     const { address } = req.params;

@@ -6,6 +6,7 @@ Endpoints:
   POST /rules    -> {address, hop_depth} -> per-heuristic rule-based signal (Phase R3)
   POST /score    -> {address} -> learned-signal risk score (Phase R4, Module 3b)
   POST /verdict  -> {address, hop_depth} -> confirmed/watch/none correlation (Phase R5)
+  GET  /clusters -> Phase R6 cluster report (confidence tiers + attribution)
 
 The Node backend (server.ts) will call these endpoints (Phase R7 wiring).
 """
@@ -17,6 +18,7 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from .cluster import load_cluster_report
 from .correlate import correlate
 from .graph import load_graph_index, local_subgraph
 from .learn import load_feature_lookup, load_learned_model, predict_wallet
@@ -133,3 +135,16 @@ def verdict(req: TraceRequest) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     return correlate(rules_out, learned_out)
+
+
+@app.get("/clusters")
+def clusters() -> dict:
+    """Phase R6: Elliptic-derived entity clusters with confidence tiers and
+    supplementary-source attribution (kept separate per the R6 requirement)."""
+    try:
+        return load_cluster_report()
+    except FileNotFoundError as e:
+        raise HTTPException(
+            status_code=503,
+            detail="Cluster report unavailable. Run scripts/build_clusters.py first.",
+        ) from e

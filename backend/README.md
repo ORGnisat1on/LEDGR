@@ -1,9 +1,10 @@
-# LEDGR Python backend (Phases R1–R5 of BACKEND_BUILD_PLAN.md)
+# LEDGR Python backend (Phases R1–R6 of BACKEND_BUILD_PLAN.md)
 
 Python pipeline: data ingestion → entity-safe split → graph construction →
 **rule-based signal (R3)** → **learned signal (R4)** → **correlation (R5)** →
-(small) FastAPI inference service. The Node `server.ts` keeps its API contract
-and will proxy trace/rules/score/verdict calls here (wired in Phase R7).
+**clustering / attribution (R6)** → (small) FastAPI inference service. The Node
+`server.ts` keeps its API contract and will proxy trace/rules/score/verdict/
+clusters calls here (fully wired in Phase R7).
 
 ## Setup
 
@@ -31,11 +32,13 @@ backend/.venv/Scripts/python backend/scripts/run_ingest.py      # R1/R2 artifact
 backend/.venv/Scripts/python backend/scripts/sanity_check_subgraph.py  # R2 subgraph sanity check
 backend/.venv/Scripts/python backend/scripts/validate_rules.py  # R3 validation
 backend/.venv/Scripts/python backend/scripts/train_model.py     # R4 trained signal
+backend/.venv/Scripts/python backend/scripts/build_clusters.py  # R6 clusters + attribution
 backend/.venv/Scripts/uvicorn ledgr.service:app --app-dir backend --port 8000
 # POST /trace   {"address": "...", "hop_depth": 2} -> subgraph + stats
 # POST /rules   {"address": "...", "hop_depth": 2} -> per-heuristic rule signal
 # POST /score   {"address": "..."}                -> learned-signal risk score
 # POST /verdict {"address": "...", "hop_depth": 2} -> confirmed/watch/none (R5)
+# GET  /clusters                                   -> cluster report (R6)
 ```
 
 Rule validation writes `artifacts/rule_validation.json` (per-heuristic
@@ -75,6 +78,26 @@ R3 rules and R4 learned — into a per-wallet verdict (METHODOLOGY.md §4):
 the mock analyzer's always-`confirmed` verdict. A wallet with an out-of-dataset
 `classified: false` learned result is never treated as flagged by the learned
 signal, so it can only be watch-as-rule or none.
+
+## Clustering / attribution (Phase R6)
+
+`scripts/build_clusters.py` builds **Elliptic-derived entity clusters**
+(hub-safeguarded connected components — the same entity definition the
+entity-safe split uses) over the dataset, optionally tags per-wallet R5
+verdicts onto their clusters, and attaches **supplementary-source**
+named-exchange attribution from `data/exchanges.txt` when the user has sourced
+one (format: `data/exchanges.example.txt`).
+
+Two confidence tiers are kept explicitly separate:
+- `elliptic-derived` — the cluster identity itself (higher confidence).
+- `supplementary-source` — attribution metadata matched from the sourced
+  exchange list (lower confidence); never merged into the cluster identity.
+
+A missing exchange list means zero supplementary matches — attribution is never
+fabricated. Writes `artifacts/clusters.json`, served by `GET /clusters`. The
+frontend `BulkConvergenceView` renders this real output with the two tiers
+visibly distinguishable (teal vs amber badges) and falls back to clearly-labeled
+mock data only when the Python service is unavailable.
 
 ## Tests
 
