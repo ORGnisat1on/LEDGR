@@ -1,5 +1,22 @@
 # Entity-Based Train/Validation/Test Split — Revised Implementation Plan
 
+> [!IMPORTANT]
+> **HISTORICAL ARTIFACT (2026-09-05) — does not describe current code.** This was the
+> Phase 1 planning document for the original `module1/` implementation, which has since
+> been **deleted**. It is kept only for decision provenance. Known divergences from the
+> live system:
+> - `HUB_DEGREE_THRESHOLD = 1000` here → **50** in `backend/ledgr/config.py` (validated
+>   against the real Elliptic graph; the 1000 figure quoted from early METHODOLOGY drafts).
+> - The `module1/entity_split.py` `EntitySplit` dataclass, actor-mapping discovery, and
+>   illicit-fraction stratification described below do **not** exist. The live
+>   implementation is `backend/ledgr/entity_split.py`: hub-safeguarded connected
+>   components, entities sorted by minimum `time_step` (time-respecting), no actor
+>   mapping, no stratification.
+> - `module1/requirements.txt` does not exist; dependencies live in `backend/requirements.txt`.
+>
+> Do not cite this document as a spec for current behavior — see `METHODOLOGY.md` and
+> `backend/ledgr/entity_split.py`.
+
 **Phase 1 deliverable.** Implements `METHODOLOGY.md §1` exactly. Not Module 2 graph construction.
 
 ---

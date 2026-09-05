@@ -67,6 +67,20 @@ Milestones are scoped against `SCOPE.md`'s MVP list only. Stretch items (Ethereu
 
 ---
 
+## Phase R6.5 — Temporal Leakage Correction & Honest Evaluation (2026-09-05) — ✅ COMPLETE
+
+Not part of the original phase plan; recorded as a correction to Phases 1 and 4 after an independent verification pass.
+
+- **Leakage discovered:** the original random entity split produced an implausible RF illicit recall of 0.9366 (~30 points above published Elliptic baselines) — the temporal-leakage signature that triggered the investigation. (This pre-fix figure was reported during the fix session; no artifact from the random-split run was committed, deliberately — see AGENTS.md on not preserving inflated metrics.)
+- **Corrected:** split rebuilt as **time-respecting** (`backend/ledgr/entity_split.py`): entities sorted by minimum `time_step`, earliest 70% → train, next 15% → val, final 15% → test. Verified by direct re-execution: train txs at time-steps 1–42, val 42–45, test 45–49; zero tx/entity overlap across splits; boundary placement clean at the entity level (§ METHODOLOGY.md "Concept Drift and the Time-Step 43 Shift" for the step-level qualifier).
+- **Honest re-evaluation** (independently reproduced): RF illicit recall **0.017241**, precision **0.500000** (TP=2 / FN=114 / TN=2,391 / FP=2, on 2,509 labeled of 14,084 test txs; 116 illicit), i.e. F1 0.033 — matching the documented Weber et al. (2019) / GuiltyWalker concept-drift difficulty of generalizing across the time-step-43 shift, per `METHODOLOGY.md` §2 and the concept-drift section. Rule-vs-ML union recall **4/116 = 0.0345**, with the rule engine adding exactly 2 catches (peel-chain) beyond ML alone. Reported honestly as a hard, known limitation — not tuned around.
+- **Permanent safeguard:** `verify_no_leakage()` now programmatically **enforces the span-0 property** (every entity's transactions in exactly one time step) on every pipeline run, logging counts to `artifacts/split_verification.json` and failing the build loudly on violation — see `METHODOLOGY.md` §1 step 2. Real-data run: 14,270/14,270 entities span-0, PASS.
+- **Evidence:** `STATUS.md` entry 2026-09-05 (verification agent); `METHODOLOGY.md` §1 step 2 + concept-drift section; `artifacts/split_verification.json` (span fields, leakage_free=true); `artifacts/model_eval.json` (honest metrics); `backend/ledgr/entity_split.py`; `backend/requirements.txt` (requests ghost-dependency fixed during the same pass); clean-venv test run 58/58.
+- **Honesty-layer UI proposal (recorded here; NOT yet implemented):** the dashboard/report UI must surface, per wallet and in aggregate: (1) that all learned-signal metrics come from the time-respecting entity-safe split with the test set at time-steps 45–49; (2) the Weber et al. (2019) time-step-43 concept-drift limitation, so post-2018 live-traced wallets are explicitly labeled as outside the model's validated regime; (3) that "confirmed" means two imperfect signals agree, not proof of guilt; (4) that an out-of-dataset wallet is `classified: False`, not scored 0. Consistent with `METHODOLOGY.md` §4's language caution.
+- **➡ Separate, not-yet-started line item: honesty-layer UI implementation.** The proposal above is the spec; do not treat the UI as built until it ships and is verified.
+
+---
+
 ## Notes on this roadmap
 
 - Each phase's milestone check is a hard gate — don't start the next phase's core work until the current phase's check passes, since later modules (Correlation, Clustering, Reporting) all depend on earlier ones producing correct, honestly-evaluated output.

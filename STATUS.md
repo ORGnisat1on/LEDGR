@@ -49,3 +49,28 @@ Existing `data_ingestion/test_fixtures/` was not touched.
 **Blocking questions, if any:**
 - None. Phase 1 entity split implementation is ready for independent verification per AGENT_ROUTING.md §3.
 - Do NOT mark Phase 1 complete in ROADMAP.md — that requires a different agent's independent review (AGENT_ROUTING.md §3).
+
+---
+
+## 2026-09-05 — Cline (verification agent) — temporal-leakage fix verified + hardening fixes
+
+**What changed:**
+- `backend/requirements.txt` — added `requests>=2.31` (ghost-dependency fix: `blockstream_client.py` / `blockcypher_client.py` import it; live BTC tracing is MVP per SCOPE.md and must fail loudly if missing, not degrade)
+- `backend/tests/test_rules.py` — `fanout_graph()` fixture bumped 8 → 11 outputs to match the tuned `FANOUT_MIN_OUT=10` (was silently diverged; `test_run_rules_composite_score_and_tiers` could never pass at current config). Fixture docstring now warns against future divergence. Broad sweep found no other stale-threshold fixtures (all other detector tests parameterize thresholds explicitly; `test_correlate.py`/`test_service.py`/`test_cluster.py` are threshold-agnostic or match current config).
+- `backend/ledgr/entity_split.py` — `verify_no_leakage()` now **enforces the span-0 property** (METHODOLOGY §1 step 2): every entity's txs must fall in one time step; violations are logged to `split_verification.json` on every run and raise a hard `RuntimeError` under the strict default. Only the two synthetic-fixture unit tests (`test_ingest_split.py`, `test_learn.py`) opt out with documented justification (random fixture legitimately spans steps). Real-data run: 14,270/14,270 entities span-0, PASS.
+- `METHODOLOGY.md` — §1 step 2 rewritten to describe the now-real enforcement; concept-drift section's "cleanly places the train/val boundary at time-step 42" qualified (clean per *entity*; adjacent splits share boundary steps 42 and 45 at the raw step level).
+- `implementation_plan.md` — marked HISTORICAL ARTIFACT: its `HUB_DEGREE_THRESHOLD=1000`, `module1/` `EntitySplit`, actor mapping, and stratification no longer match code (live: 50, `backend/ledgr/entity_split.py`).
+
+**Independently verified (by direct re-execution, not prior summaries):** time-respecting split confirmed live (train ts 1–42 / val 42–45 / test 45–49, zero overlap, 100% entities span-0); RF baseline reproduced exactly (TP=2/FN=114/TN=2391/FP=2, illicit recall 0.017241, precision 0.500000, 2,509 labeled of 14,084 test txs, 116 illicit); rule-vs-ML union recall 4/116 = 0.0345 with rule engine adding exactly 2 peel-chain catches beyond ML's 2.
+
+**Verified how:**
+```
+$ python3 -m pytest tests -q            # system python: 58 passed
+$ # fresh venv from backend/requirements.txt only:
+58 passed, 6 warnings in 10.30s          # genuinely clean venv, incl. test_live_clients.py
+```
+
+**Still open / unverified:**
+1. ROADMAP.md contains no entry for the temporal-leakage fix or the honesty-layer UI proposal — nothing to mark resolved there yet; tracking location needs a human decision.
+2. Honesty-layer UI implementation is a separate, not-yet-started task.
+3. Mixer-address validation set still a format placeholder (`data/mixers.txt` absent → `mixer_adjacent` cannot fire; union-recall numbers above computed under that condition).

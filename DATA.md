@@ -13,6 +13,7 @@
 
 - Adds an **actor/wallet-address** dataset of ~822,000 Bitcoin addresses, layered on top of the base transaction graph.
 - Directly relevant to this project because the problem statement is about **wallet-level** attribution (which exchange/VASP received a wallet's funds), not just transaction-level classification. The base Elliptic dataset alone only classifies transactions; Elliptic++ is what lets this project reason about addresses/wallets.
+- **Explicit Boundary - No Real Address Mapping:** The Elliptic dataset completely anonymizes node IDs as arbitrary integers. There is no linkage from real Bitcoin addresses (such as known mixers) back to the anonymized integers in the dataset graph. Consequently, the `mixer_adjacent` rule cannot be evaluated or tuned against the historical Elliptic dataset. It can only be exercised on live-traced wallets during Phase R7 where real Bitcoin addresses are present.
 
 ### Access risk (check first, Phase 1 day 1)
 
