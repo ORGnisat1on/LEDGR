@@ -16,7 +16,7 @@ from urllib.parse import urljoin
 
 import requests
 
-from .types import NormalizedRecord, InternalTx, TxIn, TxOut, SourceType
+from ledgr.live_types import NormalizedRecord, InternalTx, TxIn, TxOut, SourceType
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,24 +211,14 @@ class BlockstreamClient:
             # Get full transaction for UTXO structure
             full_tx = self.get_tx(txid)
 
-            # Build inputs - only genuine UTXO inputs (skip coinbase)
+            # Build inputs - allow coinbase inputs
             inputs = []
             for vin in full_tx.get("vin", []):
                 prevout = vin.get("prevout")
                 prev_txid = vin.get("txid")
                 vout = vin.get("vout")
-
-                # Skip coinbase inputs (no prevout)
-                if prevout is None or prev_txid is None or vout is None:
-                    continue  # coinbase input
-
-                prev_address = prevout.get("scriptpubkey_address")
-                amount_sats = prevout.get("value", 0)
-
-                if prev_address is None:
-                    continue  # no address (shouldn't happen for non-coinbase)
-                if amount_sats <= 0:
-                    continue
+                prev_address = prevout.get("scriptpubkey_address") if prevout else None
+                amount_sats = prevout.get("value") if prevout else None
 
                 inputs.append(TxIn(
                     txid=prev_txid,
@@ -237,26 +227,19 @@ class BlockstreamClient:
                     amount_sats=amount_sats,
                 ))
 
-            # Build outputs - only genuine UTXO outputs (skip OP_RETURN)
+            # Build outputs - allow OP_RETURN
             outputs = []
             for vout in full_tx.get("vout", []):
                 scriptpubkey = vout.get("scriptpubkey_address")
-                amount_sats = vout.get("value", 0)
-
-                # Skip OP_RETURN and other no-address outputs
-                if scriptpubkey is None:
-                    continue
-                if amount_sats <= 0:
-                    continue
+                amount_sats = vout.get("value")
 
                 outputs.append(TxOut(
                     address=scriptpubkey,
                     amount_sats=amount_sats,
                 ))
 
-            # Only yield InternalTx if we have at least one valid input or output
-            # (transactions with only coinbase inputs or only OP_RETURN outputs are not useful for clustering)
-            if inputs or outputs:
+            # Always yield InternalTx even if only coinbase inputs or OP_RETURN outputs
+            if True:
                 yield InternalTx(
                     tx_hash=txid,
                     timestamp=timestamp,

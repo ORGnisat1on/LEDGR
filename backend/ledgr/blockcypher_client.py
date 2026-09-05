@@ -17,7 +17,7 @@ from urllib.parse import urljoin
 
 import requests
 
-from .types import NormalizedRecord, InternalTx, TxIn, TxOut, SourceType
+from ledgr.live_types import NormalizedRecord, InternalTx, TxIn, TxOut, SourceType
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,48 +232,36 @@ class BlockCypherClient:
             # Get full transaction for UTXO structure
             full_tx = self.get_tx(txid)
 
-            # Build inputs - only genuine UTXO inputs (skip coinbase)
+            # Build inputs - allow coinbase
             inputs = []
             for vin in full_tx.get("inputs", []):
                 prev_hash = vin.get("prev_hash")
                 output_index = vin.get("output_index")
                 addresses = vin.get("addresses", [])
-                amount_sats = vin.get("output_value", 0)
-
-                # Skip coinbase inputs (no prev_hash, no addresses)
-                if prev_hash is None or output_index is None:
-                    continue  # coinbase input
-                if not addresses:
-                    continue  # no address (coinbase or malformed)
-                if amount_sats <= 0:
-                    continue
+                amount_sats = vin.get("output_value")
+                address = addresses[0] if addresses else None
 
                 inputs.append(TxIn(
                     txid=prev_hash,
                     vout=output_index,
-                    address=addresses[0],
+                    address=address,
                     amount_sats=amount_sats,
                 ))
 
-            # Build outputs - only genuine UTXO outputs (skip OP_RETURN)
+            # Build outputs - allow OP_RETURN
             outputs = []
             for vout in full_tx.get("outputs", []):
                 addresses = vout.get("addresses", [])
-                amount_sats = vout.get("value", 0)
-
-                # Skip OP_RETURN and other no-address outputs
-                if not addresses:
-                    continue
-                if amount_sats <= 0:
-                    continue
+                amount_sats = vout.get("value")
+                address = addresses[0] if addresses else None
 
                 outputs.append(TxOut(
-                    address=addresses[0],
+                    address=address,
                     amount_sats=amount_sats,
                 ))
 
-            # Only yield InternalTx if we have at least one valid input or output
-            if inputs or outputs:
+            # Always yield InternalTx
+            if True:
                 yield InternalTx(
                     tx_hash=txid,
                     timestamp=timestamp,

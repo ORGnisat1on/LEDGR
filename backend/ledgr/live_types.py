@@ -105,19 +105,18 @@ class TxIn:
     All fields must be populated from genuine UTXO data (live Bitcoin sources only).
     Coinbase inputs have no prevout - they are excluded from InternalTx.
     """
-    txid: str
-    vout: int
-    address: str
-    amount_sats: int
+    txid: str | None = None
+    vout: int | None = None
+    address: str | None = None
+    amount_sats: int | None = None
 
     def __post_init__(self):
-        _validate_bitcoin_tx_hash(self.txid)
-        if not isinstance(self.vout, int) or self.vout < 0:
+        if self.txid is not None:
+            _validate_bitcoin_tx_hash(self.txid)
+        if self.vout is not None and (not isinstance(self.vout, int) or self.vout < 0):
             raise ValueError(f"vout must be non-negative integer, got: {self.vout}")
-        if not isinstance(self.address, str) or len(self.address) == 0:
-            raise ValueError(f"address must be non-empty string, got: {self.address}")
-        if not isinstance(self.amount_sats, int) or self.amount_sats <= 0:
-            raise ValueError(f"amount_sats must be positive integer, got: {self.amount_sats}")
+        if self.amount_sats is not None and (not isinstance(self.amount_sats, int) or self.amount_sats < 0):
+            raise ValueError(f"amount_sats must be non-negative integer, got: {self.amount_sats}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,14 +129,12 @@ class TxOut:
 
     OP_RETURN outputs (no address) are excluded from InternalTx.
     """
-    address: str
-    amount_sats: int
+    address: str | None = None
+    amount_sats: int | None = None
 
     def __post_init__(self):
-        if not isinstance(self.address, str) or len(self.address) == 0:
-            raise ValueError(f"address must be non-empty string, got: {self.address}")
-        if not isinstance(self.amount_sats, int) or self.amount_sats <= 0:
-            raise ValueError(f"amount_sats must be positive integer, got: {self.amount_sats}")
+        if self.amount_sats is not None and (not isinstance(self.amount_sats, int) or self.amount_sats < 0):
+            raise ValueError(f"amount_sats must be non-negative integer, got: {self.amount_sats}")
 
 
 @dataclass(frozen=True, slots=True)
