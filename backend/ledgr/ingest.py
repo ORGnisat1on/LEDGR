@@ -57,7 +57,7 @@ def _find_file(directory: Path, *keywords: str) -> Path:
         raise FileNotFoundError(f"Data directory does not exist: {directory}")
     candidates = [
         p for p in sorted(directory.rglob("*.csv"))
-        if all(k.lower() in p.name.lower() for k in keywords)
+        if all(k.lower() in p.name.lower() for k in keywords) and "actors dataset" not in str(p).lower()
     ]
     if not candidates:
         raise FileNotFoundError(

@@ -16,7 +16,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-from .config import HUB_DEGREE_THRESHOLD, SPLIT_SEED, TRAIN_FRACTION, artifacts_dir
+from .config import HUB_DEGREE_THRESHOLD, SPLIT_SEED, TRAIN_FRACTION, VAL_FRACTION, artifacts_dir
 from .ingest import NormalizedDataset
 
 logger = logging.getLogger(__name__)
@@ -71,30 +71,80 @@ def build_entities(ds: NormalizedDataset, hub_threshold: int = HUB_DEGREE_THRESH
     return df
 
 
-def split_entities(entities: pd.DataFrame, train_fraction: float = TRAIN_FRACTION,
-                   seed: int = SPLIT_SEED) -> pd.DataFrame:
-    """Assign whole entities to train/test. Returns [tx_id, entity_id, is_hub, split]."""
-    rng = np.random.default_rng(seed)
-    entity_ids = sorted(entities["entity_id"].unique())
-    shuffled = rng.permutation(entity_ids)
-    n_train = int(round(len(shuffled) * train_fraction))
-    assignment = {e: ("train" if i < n_train else "test") for i, e in enumerate(shuffled)}
+def split_entities(ds: NormalizedDataset, entities: pd.DataFrame, train_fraction: float = TRAIN_FRACTION,
+                   val_fraction: float = VAL_FRACTION) -> pd.DataFrame:
+    """Assign whole entities to train/val/test in a time-respecting order."""
+    classes_df = pd.DataFrame({"tx_id": ds.tx_ids, "time_step": ds.tx_time_steps})
+    df = entities.merge(classes_df, on="tx_id")
+    
+    # Calculate min time_step per entity and sort
+    entity_times = df.groupby("entity_id")["time_step"].min().sort_values()
+    sorted_entities = entity_times.index.tolist()
+    
+    n_total = len(sorted_entities)
+    n_train = int(round(n_total * train_fraction))
+    n_val = int(round(n_total * val_fraction))
+    
+    assignment = {}
+    for i, e in enumerate(sorted_entities):
+        if i < n_train:
+            assignment[e] = "train"
+        elif i < n_train + n_val:
+            assignment[e] = "val"
+        else:
+            assignment[e] = "test"
+            
     out = entities.copy()
     out["split"] = out["entity_id"].map(assignment)
-    logger.info("Entity split (seed=%d): %d train / %d test entities", seed,
-                sum(1 for v in assignment.values() if v == "train"),
-                sum(1 for v in assignment.values() if v == "test"))
+    
+    counts = out.drop_duplicates("entity_id")["split"].value_counts()
+    logger.info("Entity split: %d train / %d val / %d test entities",
+                counts.get("train", 0), counts.get("val", 0), counts.get("test", 0))
     return out
 
-def verify_no_leakage(ds: NormalizedDataset, split_df: pd.DataFrame) -> dict:
-    """Programmatic post-split leakage check (METHODOLOGY.md §1 step 3). Writes
-    artifacts/split_verification.{json,log}; raises on leakage."""
+def verify_no_leakage(ds: NormalizedDataset, split_df: pd.DataFrame,
+                      require_span_zero: bool = True) -> dict:
+    """Programmatic post-split checks (METHODOLOGY.md §1 steps 2-3). Writes
+    artifacts/split_verification.{json,log} on every run; raises on failure.
+
+    Checks:
+      1. No-leakage (§1 step 3): tx_id and entity_id intersections across
+         train/val/test must be empty.
+      2. Span-0 (§1 step 2): every entity's transactions must fall within a
+         single time step. The time-respecting split orders entities by their
+         minimum time_step, so a multi-step entity would place later-step
+         structure into an early split and silently weaken the temporal
+         guarantee. If entity construction ever changes such that an entity
+         spans steps, this fails loudly at split time instead of being
+         rediscovered downstream. Pass require_span_zero=False to downgrade
+         check 2 to report-only — used ONLY by unit tests on the synthetic
+         random fixture, whose components legitimately span steps and where
+         only the no-leakage mechanics are under test. Real pipeline runs
+         (scripts/train_model.py) always use the strict default.
+    """
     train_txs = set(split_df.loc[split_df["split"] == "train", "tx_id"])
+    val_txs = set(split_df.loc[split_df["split"] == "val", "tx_id"])
     test_txs = set(split_df.loc[split_df["split"] == "test", "tx_id"])
-    tx_overlap = train_txs & test_txs
+    
+    tx_overlap = (train_txs & test_txs) | (train_txs & val_txs) | (val_txs & test_txs)
+    
     train_ents = set(split_df.loc[split_df["split"] == "train", "entity_id"])
+    val_ents = set(split_df.loc[split_df["split"] == "val", "entity_id"])
     test_ents = set(split_df.loc[split_df["split"] == "test", "entity_id"])
-    entity_overlap = train_ents & test_ents
+    
+    entity_overlap = (train_ents & test_ents) | (train_ents & val_ents) | (val_ents & test_ents)
+
+    # Span-0 check (METHODOLOGY.md §1 step 2): entity construction must not
+    # merge transactions from different time steps into one entity, or the
+    # min-time-step ordering below no longer guarantees time-respecting splits.
+    ts_of = dict(zip((str(t) for t in ds.tx_ids), ds.tx_time_steps.tolist()))
+    ent_ts: dict[str, list[int]] = {}
+    for tx, ent in zip(split_df["tx_id"].astype(str), split_df["entity_id"]):
+        ent_ts.setdefault(ent, []).append(ts_of[tx])
+    ent_spans = {e: max(v) - min(v) for e, v in ent_ts.items()}
+    span_violations = sorted(e for e, s in ent_spans.items() if s > 0)
+    max_span = max(ent_spans.values()) if ent_spans else 0
+    time_span_ok = not span_violations
 
     split_of = dict(zip(split_df["tx_id"], split_df["split"]))
     cross_edges = sum(1 for s, d in ds.edges.itertuples(index=False)
@@ -105,14 +155,21 @@ def verify_no_leakage(ds: NormalizedDataset, split_df: pd.DataFrame) -> dict:
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "hub_degree_threshold": HUB_DEGREE_THRESHOLD,
         "train_fraction": TRAIN_FRACTION,
-        "split_seed": SPLIT_SEED,
-        "n_entities": len(train_ents | test_ents),
+        "split_type": "time_respecting",
+        "n_entities": len(train_ents | val_ents | test_ents),
         "n_train_txs": len(train_txs),
+        "n_val_txs": len(val_txs),
         "n_test_txs": len(test_txs),
         "tx_overlap_count": len(tx_overlap),
         "entity_overlap_count": len(entity_overlap),
         "cross_split_edge_count": cross_edges,
         "leakage_free": len(tx_overlap) == 0 and len(entity_overlap) == 0,
+        # Span-0 audit (METHODOLOGY.md §1 step 2) — logged on every run
+        "n_entities_span0": len(ent_spans) - len(span_violations),
+        "entity_time_span_violations": len(span_violations),
+        "max_entity_time_span": int(max_span),
+        "time_span_ok": time_span_ok,
+        "require_span_zero": require_span_zero,
     }
 
     out_dir = artifacts_dir()
@@ -122,11 +179,26 @@ def verify_no_leakage(ds: NormalizedDataset, split_df: pd.DataFrame) -> dict:
         f.write(f"{report['generated_at']} leakage_free={report['leakage_free']} "
                 f"tx_overlap={report['tx_overlap_count']} "
                 f"entity_overlap={report['entity_overlap_count']} "
-                f"cross_split_edges={report['cross_split_edge_count']}\n")
+                f"cross_split_edges={report['cross_split_edge_count']} "
+                f"span0={report['n_entities_span0']}/{report['n_entities']} "
+                f"span_violations={report['entity_time_span_violations']} "
+                f"span_enforced={require_span_zero}\n")
     logger.info("No-leakage verification: %s", "PASS" if report["leakage_free"] else "FAIL")
+    logger.info("Span-0 verification: %s (%d/%d entities span-0, max span %d, %s)",
+                "PASS" if time_span_ok else "FAIL",
+                report["n_entities_span0"], len(ent_spans), max_span,
+                "enforced" if require_span_zero else "report-only")
     if not report["leakage_free"]:
         raise RuntimeError(f"Entity leakage detected: tx_overlap={len(tx_overlap)}, "
                            f"entity_overlap={len(entity_overlap)}")
+    if require_span_zero and not time_span_ok:
+        raise RuntimeError(
+            f"Entity time-span check failed: {len(span_violations)} of {len(ent_spans)} "
+            f"entities span multiple time steps (max span {max_span}; e.g. "
+            f"{span_violations[:5]}). The time-respecting split requires span-0 "
+            f"entities (METHODOLOGY.md §1 step 2) — entity construction changed or "
+            f"is misconfigured. This is a hard failure by design, not a warning."
+        )
     return report
 
 

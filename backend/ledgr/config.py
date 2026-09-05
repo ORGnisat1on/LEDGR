@@ -21,8 +21,9 @@ DEFAULT_ARTIFACTS_DIR = REPO_ROOT / "artifacts"
 # component-forming step so one hub cannot merge thousands of unrelated
 # entities into a single giant component. Degree above this threshold => hub.
 HUB_DEGREE_THRESHOLD = 50
-# Entity-level train/test split ratio (METHODOLOGY.md §1 step 2: 70/30 or 80/20)
-TRAIN_FRACTION = 0.8
+# Entity-level train/val/test split ratio (METHODOLOGY.md §1 step 2: 70/15/15)
+TRAIN_FRACTION = 0.70
+VAL_FRACTION = 0.15
 # Fixed seed so the split is reproducible and auditable
 SPLIT_SEED = 42
 
@@ -35,12 +36,12 @@ RAW_LABEL_MAP = {"1": LABEL_ILlicit, "2": LABEL_LICIT, "unknown": LABEL_UNKNOWN}
 
 # --- Phase R3: rule-based signal parameters (logged with every validation run) ---
 # Peel chain: successive nodes each forwarding to exactly one next node
-PEEL_CHAIN_MIN_HOPS = 3
+PEEL_CHAIN_MIN_HOPS = 2
 PEEL_CHAIN_MAX_TIME_GAP = 1  # consecutive chain edges may span at most N time steps
 # Rapid fan-out: few funding inputs, many outputs, tight time window
-FANOUT_MIN_OUT = 5
-FANOUT_MAX_IN = 2
-FANOUT_TIME_WINDOW = 2
+FANOUT_MIN_OUT = 10
+FANOUT_MAX_IN = 1
+FANOUT_TIME_WINDOW = 1
 # Mixer adjacency: how many hops from a known mixer address still counts as adjacent
 MIXER_MAX_HOPS = 2
 # Auditable rule weights -> composite rule_score (sum of fired weights, 0..100)

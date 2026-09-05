@@ -84,7 +84,7 @@ def test_score_endpoint_learned_signal():
     import ledgr.service as svc
 
     ds = load_elliptic(FIXTURE)
-    split_df = split_entities(build_entities(ds))
+    split_df = split_entities(ds, build_entities(ds))
     tmp = BACKEND / "tests" / "fixtures" / "_r4tmp"
     train_and_evaluate(ds, split_df, out_dir=tmp, n_estimators=20)
     svc._MODEL = load_learned_model(tmp / "learned_model.joblib")
@@ -137,7 +137,7 @@ def test_verdict_endpoint():
     # Train a tiny model + feature lookup so the learned signal is available.
     tmp = BACKEND / "tests" / "fixtures" / "_r5tmp"
     ds = load_elliptic(FIXTURE)
-    split_df = split_entities(build_entities(ds))
+    split_df = split_entities(ds, build_entities(ds))
     train_and_evaluate(ds, split_df, out_dir=tmp, n_estimators=20)
     svc._MODEL = load_learned_model(tmp / "learned_model.joblib")
     svc._FEATURES = load_feature_lookup(tmp / "feature_lookup.pkl")

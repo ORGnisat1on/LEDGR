@@ -49,11 +49,11 @@ def fanout_graph() -> nx.DiGraph:
     G.add_node("src", label=-1, time_step=5)
     G.add_node("burst", label=-1, time_step=6)
     G.add_node("unused", label=-1, time_step=6)
-    for i in range(8):
+    for i in range(11):
         G.add_node(f"out{i}", label=-1, time_step=7)
         G.add_edge("unused", f"out{i}")
     G.add_edge("src", "burst")
-    G.add_edges_from(("burst", f"out{i}") for i in range(8))
+    G.add_edges_from(("burst", f"out{i}") for i in range(11))
     return G
 
 

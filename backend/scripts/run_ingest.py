@@ -46,7 +46,7 @@ def main() -> int:
     ents = build_entities(ds)
 
     print("[4/5] Splitting entities and verifying no leakage ...")
-    split_df = split_entities(ents)
+    split_df = split_entities(ds, ents)
     report = verify_no_leakage(ds, split_df)
     split_df.to_csv(out / "entity_split.csv", index=False)
 

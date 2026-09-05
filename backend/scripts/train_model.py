@@ -43,7 +43,7 @@ def main() -> int:
     ents = build_entities(ds)
 
     print("[3/5] Splitting entities and verifying no leakage ...")
-    split_df = split_entities(ents)
+    split_df = split_entities(ds, ents)
     report = verify_no_leakage(ds, split_df)
     print(f"      entities={report['n_entities']} leakage_free={report['leakage_free']}")
 
