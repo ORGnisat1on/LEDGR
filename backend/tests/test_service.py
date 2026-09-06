@@ -62,7 +62,9 @@ def test_rules_endpoint():
     assert "engine_params" in body
 
 
-def test_trace_unknown_address_404():
+def test_trace_unknown_address_404(monkeypatch):
+    """With live tracing disabled, an unknown address is a loud 404 (never fabricated)."""
+    monkeypatch.setenv("LEDGR_LIVE_TRACING", "0")
     client = make_client()
     assert client.post("/trace", json={"address": "nope", "hop_depth": 2}).status_code == 404
     assert client.post("/rules", json={"address": "nope", "hop_depth": 2}).status_code == 404
@@ -158,7 +160,8 @@ def test_verdict_endpoint():
     assert not (verdicts == {VERDICT_CONFIRMED}), "must not be always-confirmed across wallets"
 
 
-def test_verdict_404_unknown_address():
+def test_verdict_404_unknown_address(monkeypatch):
+    monkeypatch.setenv("LEDGR_LIVE_TRACING", "0")
     client = make_client()
     r = client.post("/verdict", json={"address": "wallet-not-in-graph", "hop_depth": 2})
     assert r.status_code == 404

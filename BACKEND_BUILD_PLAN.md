@@ -80,9 +80,23 @@ This keeps your working UI and API surface intact and confines the real engineer
 - Confirm every `SCOPE.md` boundary is reflected accurately in the UI/report copy — no leftover "100% operational" or similar overclaiming.
 - Fix issues found; no new features at this stage.
 
-## Phase R9 — Submission Packaging (Day 16, Sept 19–20)
+## Phase R9 — Live Address Tracing (out-of-dataset addresses)
 
-- Final README pass reflecting the real (not mocked) pipeline status.
+**Why this phase exists:** live testing against real rich-list/historic addresses (Binance cold wallets, Mt. Gox, the genesis address) confirmed that indexed-dataset lookups will essentially never match a real-world address a user pastes in — Elliptic/Elliptic++'s node identifiers don't line up with today's chain. Without this phase, the system can only ever say "not classified" for the case that matters most in a real demo or real use: a wallet nobody has seen before.
+
+- Build `live_source.py` — a client for Blockstream.info (primary) with BlockCypher as fallback, fetching an address's real transaction history when it's not found in the indexed graph.
+- Build `live_graph.py` — constructs an ad-hoc local subgraph (same shape as `graph.py`'s `local_subgraph` output) from the live-fetched data, bounded by hop-depth and a hard cap on nodes/transactions fetched (a Binance cold wallet has enormous tx history — fetch the most recent N, not everything).
+- Wire the trace endpoint: indexed lookup first (existing fast path); on miss, fall back to live fetch → live subgraph → **run the rule-based engine (R3) against it** (heuristics don't need training data, so this works on any real address). The learned signal (R4) has no feature vector for an out-of-dataset wallet and must keep returning honest `classified: false` — never a fabricated score.
+- **Correlation cap (new, explicit rule):** since only one signal (rules) can run on a live-looked-up address, the verdict for any `source: "live-lookup"` result is capped at `watch` — it can never reach `confirmed`, because `confirmed` requires two independent signals agreeing, and only one exists here. This must be enforced in code, not just assumed.
+- Named-exchange attribution (R6) can still run on live-looked-up addresses if the address matches a known hot-wallet list — independent of Elliptic training data.
+- Response payload adds `source: "elliptic-indexed" | "live-lookup"` and, for live results, `ml_signal: "unavailable — address not in training dataset"` so the UI never implies more certainty than exists.
+- Distinguish failure modes clearly: address genuinely not found on any chain (bad/unused address) vs. live-API error (timeout/rate-limit) vs. found-and-live-scored — these must not collapse into the same "unavailable" message, echoing the earlier bug where a 404 got mislabeled as a service outage.
+- Tests: record fixture responses for a handful of real addresses (can't hit the live network in CI) — cover a high-tx-volume address (pagination/cap logic), a low-tx address, and a nonexistent address.
+- **Exit criteria:** pasting any real, valid Bitcoin address — in-dataset or not — returns an honest result: full signal if indexed, rule-only capped-at-`watch` result if live-looked-up, or a clear "not found on-chain" if the address itself doesn't exist. No result is ever silently mislabeled or fabricated.
+
+## Phase R10 — Submission Packaging (final days before Sept 20)
+
+- Final README pass reflecting the real (not mocked) pipeline status, including the indexed-vs-live distinction.
 - Demo script, submission artifacts per SIH requirements.
 - Freeze scope. Submit.
 
