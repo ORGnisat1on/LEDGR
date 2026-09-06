@@ -26,6 +26,36 @@ Early-stage build. See [`ROADMAP.md`](./ROADMAP.md) for milestones and current p
 
 Full module breakdown is in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
+### Honest capability caveats (read before relying on, or demoing, any of this)
+
+The audit of the shipped backend (2026-09-06) surfaced three things worth knowing
+up front. They are limitations of an honest build, not bugs — the system's
+methodology is designed around them.
+
+- **2 of the 3 rule-based heuristics are currently active.** Peel-chain and
+  rapid-fan-out detection run for real on the transaction graph. **Mixer-adjacent-hop
+  detection is implemented in code but cannot fire right now:** `data/mixers.txt`
+  is intentionally empty because no citable, verifiable public source of exact
+  Bitcoin mixer addresses could be found (documented in the item-1/item-2 audit;
+  the file explains the empty list and lists the sources checked). Until a real
+  validation set is sourced, `mixer_adjacent` stays silent — it never fires on
+  made-up addresses.
+- **Named-exchange attribution only works through the live-lookup path, not on
+  indexed traces.** The indexed Elliptic graph stores anonymized transaction-IDs
+  with no address mapping, so hot-wallet-list matching can only ever match real
+  BTC addresses fetched via the R9 live-lookup path. Tracing an in-dataset wallet
+  will therefore show **no** named-exchange attribution, by construction — it is
+  a real limitation of matching anonymized ids against a real-address hot-wallet
+  list, not a silent gap.
+- **The learned signal's real-data recall is low by design of an honest baseline,
+  not a defect.** On the time-respecting entity-safe split the committed random
+  forest gets **TP=2, FP=2, FN=114, TN=2398 — recall 0.017, precision 0.500,
+  F1 0.033**. That low recall is *exactly why* verdicts never rely on the learned
+  signal alone: it is one of two independent signals, and a **confirmed** flag
+  requires both to agree precisely because either signal on its own is imperfect.
+  This is the methodology working as intended, not "the ML doesn't work".
+  (See [`DEMO.md`](./DEMO.md) for addresses that actually demonstrate each tier.)
+
 ## What this is *not* (read before assuming more than it does)
 
 This system is built to a real ₹0, ~20-day, no-government-access constraint. To keep every claim honest:
@@ -61,3 +91,4 @@ Setup and run instructions will be added here once the data pipeline milestone (
 - [`SCOPE.md`](./SCOPE.md) — MVP vs. stretch vs. out-of-scope
 - [`ROADMAP.md`](./ROADMAP.md) — phased build plan to submission
 - [`METHODOLOGY.md`](./METHODOLOGY.md) — evaluation methodology and metrics
+- [`DEMO.md`](./DEMO.md) — which wallets to use in the live demo and why
