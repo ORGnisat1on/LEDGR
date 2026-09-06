@@ -135,11 +135,17 @@ def train_model(
     return model
 
 
-def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray) -> dict:
+def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray,
+                   flag_threshold: float = LEARNED_FLAG_THRESHOLD) -> dict:
     """Honest evaluation on held-out entities (METHODOLOGY.md §2).
 
     Headline metrics are illicit recall / precision / F1. Accuracy is reported
     only as a secondary number and never presented as the headline result.
+    The positive-class decision uses the *configured* LEARNED_FLAG_THRESHOLD
+    (not sklearn's implicit argmax default), so the eval threshold always
+    matches the one /score serves — audit finding 2026-09-06: the two happened
+    to coincide at 0.5, but the code now guarantees it instead of assuming it.
+    The raw confusion matrix is logged per the same audit request.
     """
     from sklearn.metrics import (
         accuracy_score,
@@ -148,7 +154,12 @@ def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray) -> dict:
         recall_score,
     )
 
-    y_pred = model.predict(X_test)
+    probs = predict_risk(model, X_test)
+    y_pred = (probs >= flag_threshold).astype(np.int64)
+    tp = int(np.sum((y_pred == POS_LABEL) & (y_test == POS_LABEL)))
+    fp = int(np.sum((y_pred == POS_LABEL) & (y_test != POS_LABEL)))
+    fn = int(np.sum((y_pred != POS_LABEL) & (y_test == POS_LABEL)))
+    tn = int(np.sum((y_pred != POS_LABEL) & (y_test != POS_LABEL)))
     n = int(len(y_test))
     n_illicit = int(np.sum(y_test == POS_LABEL))
     zero = {"zero_division": 0}
@@ -160,12 +171,16 @@ def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray) -> dict:
         "illicit_f1": float(f1_score(y_test, y_pred, pos_label=POS_LABEL, **zero)),
         "accuracy": float(accuracy_score(y_test, y_pred)),  # secondary only
         "n_illicit_predicted": int(np.sum(y_pred == POS_LABEL)),
+        # Raw confusion matrix (audit 2026-09-06): reported, not just derived rates
+        "confusion_matrix": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
+        "flag_threshold_applied": flag_threshold,
     }
     logger.info(
         "Eval on held-out entities: illicit recall=%.3f precision=%.3f f1=%.3f "
-        "(n_test=%d, n_illicit_test=%d) — accuracy=%.3f reported as secondary only",
+        "(n_test=%d, n_illicit_test=%d, thr=%.2f, TP=%d FP=%d FN=%d TN=%d) "
+        "— accuracy=%.3f reported as secondary only",
         metrics["illicit_recall"], metrics["illicit_precision"], metrics["illicit_f1"],
-        n, n_illicit, metrics["accuracy"],
+        n, n_illicit, flag_threshold, tp, fp, fn, tn, metrics["accuracy"],
     )
     return metrics
 
@@ -248,6 +263,15 @@ def train_and_evaluate(
     metrics = evaluate_model(model, X_test, y_test)
     train_seconds = round(time.time() - start, 2)
 
+    # Effective per-class weights implied by class_weight="balanced"
+    # (n_samples / (n_classes * class_count)) — recorded so audits can verify
+    # balancing actually reached the fit, not just the config (audit 2026-09-06).
+    counts = np.bincount(y_train)
+    effective_weights = {
+        int(c): round(len(y_train) / (len(counts) * int(counts[c])), 6)
+        for c in range(len(counts)) if counts[c] > 0
+    }
+
     # Persist artifacts
     model_path = save_learned_model(model, out)
     lookup_path = save_feature_lookup(build_feature_lookup(ds), out)
@@ -259,6 +283,7 @@ def train_and_evaluate(
         "parameters": {
             "n_estimators": n_estimators,
             "class_weight": "balanced",
+            "effective_class_weights": effective_weights,
             "seed": seed,
             "n_train_txids": len(train_ids),
             "n_test_txids": len(test_ids),

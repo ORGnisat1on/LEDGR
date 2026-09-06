@@ -10,3 +10,13 @@
 #   - academic/publications publishing identified mixer clusters
 #   - court filings / law-enforcement seizure announcements
 #   - reputable open-source wallet-tagging repositories (record the commit)
+#
+# --- CURRENT LIVE LIST (2026-09-06) ---
+# The gitignored data/mixers.txt is INTENTIONALLY EMPTY. As of 2026-09-06 no
+# citable public source with exact, verifiable Bitcoin mixer addresses was
+# found (Europol/Chainalysis ChipMixer reporting and the "Cryptocurrency
+# tumbler" literature page describe services but publish no exact addresses;
+# academic datasets exist but were not accessible to verify entry-by-entry).
+# Per the sourcing rule (never fabricate), the mixer_adjacent heuristic stays
+# silent — its 30-point rule_score contribution is simply never earned until a
+# real, per-address-sourced validation set replaces this comment.

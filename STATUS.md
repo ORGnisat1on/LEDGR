@@ -176,3 +176,23 @@ POST /trace 232629023 -> elliptic-indexed fast path unchanged
 3. **R6 — `data/exchanges.txt` contains likely-fabricated entries** (e.g. `1BitPayMerchantCommercialGateway9988` with unverifiable "Public VASP Hot-Wallet Registry" sourcing). Zero supplementary matches means no fabricated attribution reaches output today, but per SCOPE/AGENTS sourcing rules this list should be treated as unsourced and replaced with a genuinely sourced one before the R10 demo. NOT silently deleted (user data) — flagged here.
 
 **Verified clean:** R2 hop_depth is a hard cap (adversarially recomputed distances on real graph); R3 heuristics find 55,110 peel-chain / 530 fan-out nodes on the real graph with structure-derived evidence; R4 scores derive from the real RF (per-wallet scores differ; unknown wallet `classified:false`); R5 confirmed⊆both-flagged invariant holds on a 200-wallet real sweep (0 violations); R6 cluster members are genuinely one connected component, tiers separate; R7 proxy composes real pipeline output with labeled fallback only on failure; R9 tests never touch the live network (72 passed with dead proxy).
+
+---
+
+## 2026-09-06 — Cline — R10 pre-close: source exchanges.txt (replace fabricated) + audit R4 recall
+
+**Item 1 — data/exchanges.txt now genuinely sourced.**
+- Removed 4 fabricated/unverifiable entries (fake addresses, bogus "Public VASP Hot-Wallet Registry" sourcing, malformed `1BitPayMerchantCommercialGateway9988`).
+- Replaced with 6 addresses read directly from the public BitInfoCharts "Top 100 Richest Bitcoin Addresses" page (each shown with an explicit `wallet:` label): Binance cold wallet (34xp4v...), Binance cold wallet 2 (3M219K...), Robinhood cold wallet (bc1ql49...), Bitfinex cold wallet (bc1qgdj...), OKX cold wallet (1CY7fy...), gate.io cold wallet (162bzZ...). Source URL + retrieved date (2026-09-06) recorded per-entry in the file header; provenance caveat (community/explorer attribution, not exchange-confirmed) documented. Source: https://bitinfocharts.com/top-100-richest-bitcoin-addresses.html.
+- `artifacts/clusters.json` regenerated (`--no-verdicts`): 0 supplementary matches (structurally expected — indexed graph contains Elliptic anonymized tx-ids, not real BTC addresses, and no Elliptic++ address map is present in data/raw), 6 unmatched, all with the new BitInfoCharts source. Match count unchanged from zero, but the list is now defensible.
+- `data/mixers.txt`: INTENTIONALLY EMPTY. Could not find a citable public source with exact, verifiable Bitcoin mixer addresses (checked Europol/Chainalysis ChipMixer reporting and the Cryptocurrency tumbler literature page; academic datasets exist but were not accessible to verify entry-by-entry). Comment documents the heuristic stays silent rather than firing on made-up addresses, per the follow-up instruction. mixer_adjacent rule_score is simply never earned until a real validation set is sourced.
+
+**Item 2 — R4 recall 0.0172 investigated; NOT a bug.**
+- Raw confusion matrix (real test set, 116 illicit / 2400 licit / 11570 unknown-drpped): **TP=2, FP=2, FN=114, TN=2398**.
+- class_weight="balanced" confirmed reaching the fit — effective weights logged to model_eval.json: licit 0.561864, illicit 4.541113 (n/(n_classes*count)). model.class_weight == 'balanced'.
+- Classification threshold: eval now applies LEARNED_FLAG_THRESHOLD (0.5) explicitly instead of sklearn's implicit `predict()` argmax; confirmed sklearn predict() == (probs>=0.5), so behavior is unchanged at 0.5 — the code now guarantees the inspected threshold rather than assuming it. This is the only R4 code change; it does not alter results.
+- Supervised-eligible filtering does NOT starve the illicit class. Before/after filtering: train illicit 4366→4366, licit 35287→35287; test illicit 116→116, licit 2400→2400; only 'unknown' dropped (train 133567, test 11570).
+- Conclusion: 0.0172 recall is the genuine baseline result on the time-respecting entity-safe split (reproduces exactly, highest-probability missed illicit wallet is only 0.425). No tuning; numbers unchanged (recall 0.017 / precision 0.500 / f1 0.033).
+- Model retrained with the explicit-threshold eval; model_eval.json now includes confusion_matrix + flag_threshold_applied + effective_class_weights.
+
+**Still open / unverified:** real mixer-address validation set (data/mixers.txt) — needs a genuinely sourced list before mixer_adjacent can fire; acknowledged as unresolved due to lack of a citable public source.
