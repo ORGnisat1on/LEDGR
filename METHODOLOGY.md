@@ -75,3 +75,9 @@ The correlation layer (`ARCHITECTURE.md` Module 4) is only meaningful if each in
 These thresholds and their tuning process are logged (not just the final values) so the decision is auditable rather than presented as an unexplained cutoff.
 
 **Language caution for reporting:** "Confirmed" here means *two independent, imperfect signals agree* — it is not legal proof and should never be presented or narrated as investigation-grade certainty, given this maps to a real law-enforcement use case (I4C). Module 6's report output and any demo narration should state this explicitly (e.g. "confirmed = flagged by both an independent heuristic and a learned model; an investigative lead, not a determination of guilt"), consistent with the same honesty discipline already applied to the `elliptic-derived` vs `supplementary-source` confidence tags in `DATA.md`/`ARCHITECTURE.md`.
+
+---
+
+## 5. Live-traced UTXO Clustering Heuristics
+
+The live-traced UTXO clustering relies on common-input and change-address heuristics. The change-address heuristic is a known, documented technique in the literature, and is also a known target for deliberate evasion (senders can structure outputs to look like payments rather than change specifically to defeat this heuristic). Live-UTXO cluster membership from this heuristic should be treated as a weaker confidence signal than common-input clustering, not equal to it.

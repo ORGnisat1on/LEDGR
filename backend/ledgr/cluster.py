@@ -27,6 +27,8 @@ import logging
 import time
 from pathlib import Path
 
+import networkx as nx
+
 from .config import (
     CLUSTER_MEMBER_SAMPLE,
     CLUSTER_REPORT_FILE,
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 TIER_ELLIPTIC = "elliptic-derived"
 TIER_SUPPLEMENTARY = "supplementary-source"
+TIER_LIVE_UTXO = "live-traced-utxo"
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +95,81 @@ def build_entity_clusters(
             "attribution": None,
         })
     logger.info("Built %d Elliptic-derived entity clusters (%d wallets total)",
+                len(clusters), sum(c["n_wallets"] for c in clusters))
+    return clusters
+
+
+# ---------------------------------------------------------------------------
+# Live-traced UTXO clusters (confidence tier: live-traced-utxo)
+# ---------------------------------------------------------------------------
+
+
+def build_live_clusters(
+    internal_txs: list,  # list[InternalTx] from live_types
+    max_members_sample: int = CLUSTER_MEMBER_SAMPLE,
+) -> list[dict]:
+    """Group wallets into live-traced UTXO clusters.
+    
+    Implements two R6 clustering heuristics for live-traced data:
+    1. Common-input (co-spend): Addresses used as inputs in the same tx belong to the same entity.
+    2. Change-address: A transaction output that is the unique novel address in a multi-output
+       transaction (never seen as input or output elsewhere in the traced subgraph) belongs to
+       the same entity as the inputs.
+    """
+    graph = nx.Graph()
+    
+    # 1. Compute global address frequencies to support the widened novelty check
+    global_freq = {}
+    for tx in internal_txs:
+        for inp in tx.inputs:
+            if inp.address:
+                global_freq[inp.address] = global_freq.get(inp.address, 0) + 1
+                graph.add_node(inp.address)
+        for out in tx.outputs:
+            if out.address:
+                global_freq[out.address] = global_freq.get(out.address, 0) + 1
+                graph.add_node(out.address)
+                
+    # 2. Build edges based on heuristics
+    for tx in internal_txs:
+        tx_inputs = [inp.address for inp in tx.inputs if inp.address]
+        tx_outputs = [out.address for out in tx.outputs if out.address]
+        
+        # Heuristic 1: Common-input (co-spend)
+        if len(tx_inputs) > 1:
+            first_in = tx_inputs[0]
+            for other_in in tx_inputs[1:]:
+                graph.add_edge(first_in, other_in)
+                
+        # Heuristic 2: Change-address
+        # Guard: must have at least 2 outputs (prevent trivial single-output matches)
+        if len(tx_outputs) >= 2 and tx_inputs:
+            # Widen novelty check: must not appear as input or output anywhere else in the traced data
+            # meaning its global frequency across the whole subgraph must be exactly 1.
+            candidate_changes = [addr for addr in tx_outputs if global_freq[addr] == 1]
+            if len(candidate_changes) == 1:
+                change_addr = candidate_changes[0]
+                for in_addr in tx_inputs:
+                    graph.add_edge(in_addr, change_addr)
+
+    # 3. Extract connected components
+    clusters = []
+    # Note: we use enumerate over sorted components to get a deterministic cluster_id
+    for idx, component in enumerate(sorted(nx.connected_components(graph), key=lambda c: sorted(list(c))), start=1):
+        members = sorted(list(component))
+        total = len(members)
+        clusters.append({
+            "cluster_id": f"live_cluster_{idx}",
+            "confidence_tier": TIER_LIVE_UTXO,
+            "n_wallets": total,
+            "label_counts": None,  # Not applicable for live UTXO clusters
+            "illicit_fraction": 0.0,
+            "members_sample": members[:max_members_sample],
+            "n_members_truncated": max(0, total - max_members_sample),
+            "attribution": None,
+        })
+        
+    logger.info("Built %d live-traced UTXO clusters (%d wallets total)",
                 len(clusters), sum(c["n_wallets"] for c in clusters))
     return clusters
 

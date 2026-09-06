@@ -129,8 +129,9 @@ Victim-reported wallet address (input)
 **Inputs:** verdict records from Module 4, the transaction graph from Module 2, and supplementary label sources (known exchange hot-wallet address lists, community-sourced tagging services).
 
 **Outputs:** wallet clusters with an optional entity/exchange name attached, tagged with a confidence tier: `elliptic-derived` (higher confidence, licit/illicit only, no name) vs. `supplementary-source` (named, lower confidence).
+Note: Live-traced UTXO clustering (common-input and change-address heuristics) runs on a separate `live-traced-utxo` tier. "The dataset" for these heuristics means the locally-traced, hop-bounded subgraph, not the full blockchain. A change address could have real prior history outside the traced radius that this check structurally cannot see, which is a known scope limitation.
 
-**Explicit boundary:** named-exchange attribution is only ever presented with its confidence tier visible — the system never presents a supplementary-source name with the same confidence as an Elliptic-derived licit/illicit label.
+**Explicit boundary:** named-exchange attribution is only ever presented with its confidence tier visible — the system never presents a supplementary-source name with the same confidence as an Elliptic-derived licit/illicit label. Additionally, Elliptic-derived (hub-safeguarded connected components) and live-traced UTXO clustering are distinct paths due to the unavailability of the Elliptic++ actor dataset.
 
 **Stretch extension — cross-wallet convergence (bulk tracing):** when multiple wallets are traced in one batch (see `SCOPE.md` bulk wallet tracing), Module 5 can additionally check whether independently reported wallets converge on the same cluster/exchange, surfacing that several victims' funds landed with the same actor. This reuses the existing per-wallet cluster output — it does not require a new inference model, only comparing cluster assignments across multiple Module 4 verdict sets instead of one.
 
