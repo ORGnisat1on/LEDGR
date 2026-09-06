@@ -27,12 +27,30 @@ N_FEATURES = 166  # feature columns after tx id (matches load_elliptic / ingest.
 
 
 @pytest.fixture(scope="module")
-def split_ds():
+def split_ds(tmp_path_factory):
+    """Module-scoped dataset + entity-safe split for the learning-model tests.
+
+    verify_no_leakage() writes artifacts/split_verification.{json,log} on every
+    call — run it against a throwaway artifacts dir so the fixture never
+    clobbers the REAL-data verification artifact in artifacts/ (that file must
+    only ever be written by a real pipeline run; a fixture overwrite made the
+    on-disk artifact lie about which dataset it verified).
+    """
+    from ledgr import entity_split
+
     ds = load_elliptic(FIXTURE)
     split_df = split_entities(ds, build_entities(ds))
-    # require_span_zero=False: synthetic random fixture legitimately spans time
-    # steps; span-0 is strictly enforced on real pipeline runs (METHODOLOGY §1).
-    assert verify_no_leakage(ds, split_df, require_span_zero=False)["leakage_free"]
+    real_artifacts_dir = entity_split.artifacts_dir
+    tmp_artifacts = tmp_path_factory.mktemp("split_verification")
+    entity_split.artifacts_dir = lambda: tmp_artifacts
+    try:
+        # require_span_zero=False: synthetic random fixture legitimately spans
+        # time steps; span-0 is strictly enforced on real pipeline runs
+        # (METHODOLOGY §1).
+        report = verify_no_leakage(ds, split_df, require_span_zero=False)
+    finally:
+        entity_split.artifacts_dir = real_artifacts_dir
+    assert report["leakage_free"]
     return ds, split_df
 
 

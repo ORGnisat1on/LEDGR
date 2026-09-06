@@ -17,6 +17,7 @@ Writes artifacts/hardening_report.json and exits non-zero on any failure.
 """
 
 import json
+import os
 import random
 import sys
 import time

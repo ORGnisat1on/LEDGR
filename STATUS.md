@@ -163,3 +163,16 @@ POST /trace 232629023 -> elliptic-indexed fast path unchanged
 **Still open / unverified:**
 - Phase R10 submission packaging (README pass, demo script, scope freeze).
 - Live fetches are Blockstream free-tier: caps keep a single trace well under rate limits, but bulk tracing of many live addresses in one session would violate SCOPE.md and is not supported.
+
+---
+
+## 2026-09-06 — Cline (audit agent) — full R1–R9 audit: 3 findings, fixed
+
+**Audit method:** raw test run + re-executed every phase's claim against real code/data (adversarial hop-cap check on 20 real seeds; heuristics run on the real 203,769-tx graph; model predictions diffed; 200-wallet correlation invariant sweep; cluster-connectivity spot-check; test suite run with network proxied to a dead port to prove no live calls in CI).
+
+**Findings (all fixed in this commit):**
+1. **R1 — test suite clobbered the real-data leakage artifact.** `tests/test_learn.py`'s `split_ds` fixture called `verify_no_leakage()` without redirecting `artifacts_dir()`, so every pytest run overwrote `artifacts/split_verification.json` with synthetic-fixture numbers (478 entities, `time_span_ok: false`) — the on-disk R6.5 evidence was a lie at audit time. Fixed: fixture now redirects to a throwaway dir (verified: artifact mtime unchanged across a full test run); real-data artifact regenerated (14,270/14,270 entities span-0, leakage_free=true, enforced).
+2. **R8 — hardening check was broken.** `scripts/hardening_check.py` referenced `os` without importing it (broke when R9 added the live-tracing toggle) — it crashed instead of running the 6 checks. Fixed; all 6 checks PASS again.
+3. **R6 — `data/exchanges.txt` contains likely-fabricated entries** (e.g. `1BitPayMerchantCommercialGateway9988` with unverifiable "Public VASP Hot-Wallet Registry" sourcing). Zero supplementary matches means no fabricated attribution reaches output today, but per SCOPE/AGENTS sourcing rules this list should be treated as unsourced and replaced with a genuinely sourced one before the R10 demo. NOT silently deleted (user data) — flagged here.
+
+**Verified clean:** R2 hop_depth is a hard cap (adversarially recomputed distances on real graph); R3 heuristics find 55,110 peel-chain / 530 fan-out nodes on the real graph with structure-derived evidence; R4 scores derive from the real RF (per-wallet scores differ; unknown wallet `classified:false`); R5 confirmed⊆both-flagged invariant holds on a 200-wallet real sweep (0 violations); R6 cluster members are genuinely one connected component, tiers separate; R7 proxy composes real pipeline output with labeled fallback only on failure; R9 tests never touch the live network (72 passed with dead proxy).
