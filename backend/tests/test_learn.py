@@ -36,6 +36,19 @@ def split_ds():
     return ds, split_df
 
 
+def test_fixture_split_is_leakage_free(tmp_path, monkeypatch):
+    """METHODOLOGY §1: confirm the fixture split has no entity/tx leakage.
+    Uses monkeypatch to isolate from real artifacts/ output."""
+    monkeypatch.setattr("ledgr.entity_split.artifacts_dir", lambda: tmp_path)
+    ds = load_elliptic(FIXTURE)
+    split_df = split_entities(ds, build_entities(ds))
+    # require_span_zero=False: synthetic random fixture legitimately spans time
+    # steps; span-0 is strictly enforced on real pipeline runs (METHODOLOGY §1).
+    report = verify_no_leakage(ds, split_df, require_span_zero=False)
+    assert report["leakage_free"] is True
+    assert (tmp_path / "split_verification.json").exists()
+
+
 def _labels(ds, ids):
     lab = dict(zip(map(str, ds.tx_ids), ds.tx_labels.tolist()))
     return np.array([lab[t] for t in ids], dtype=np.int64)

@@ -42,3 +42,9 @@ See `PROJECT_MEMORY.md` for the current overall project snapshot; this file is t
 
 - **Summary:** Rule-based signal (Module 3a) real: peel-chain, rapid fan-out, mixer-adjacency heuristics with per-rule auditable evidence, weighted rule_score (40/30/30, thresholds in config, env-tunable) and rule_flag tiers - no hardcoded scores. R1/R2 foundation rebuilt as prerequisite (ingest, entity split + no-leakage check, graph + hop_depth enforcement). Independent validation script passes all known-pattern + false-positive cases (merchant wallet, isolated wallet, far-from-mixer stay unflagged), report at artifacts/rule_validation.json. FastAPI exposes POST /rules alongside /trace. 29 pytest tests pass; /rules verified live
 - **Still mock / remaining:** Real Elliptic CSVs still needed for dataset-scale validation; mixer-address validation set still a synthetic-format placeholder (data/mixers.example.txt) - must be sourced per SCOPE.md
+
+## R7 — done (2026-09-05 13:02 UTC)
+
+- **Summary:** Integration + Production Fix complete. Express `server.ts` proxy routes `/api/trace` and `/api/clusters` linked to Python FastAPI backend (`http://localhost:8000`). Fixed TS2304 variable error in `App.tsx`. Verified end-to-end trace flow returning live pipeline data (`source: "pipeline"`, `available: true`). Verified production build (`npm run build`) and ESM server bundle (`dist/server.mjs`) start cleanly without crashes. All 56 backend tests pass.
+- **Still mock / remaining:** R8 testing & hardening and R9 submission packaging.
+

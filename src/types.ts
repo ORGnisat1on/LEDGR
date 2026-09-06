@@ -38,6 +38,12 @@ export interface WalletNode {
   mlScore: number; // 0 to 1
   mlPrediction: MlPrediction;
   verdict: RiskVerdict;
+  /**
+   * True only when the pipeline actually evaluated this wallet's signals.
+   * Live pipeline traces evaluate the reported wallet; subgraph members are
+   * shown structurally (label + hop) and are NOT fabricated signal values.
+   */
+  evaluated?: boolean;
   entityClusterId?: string;
   attribution?: {
     name: string;
@@ -100,7 +106,7 @@ export interface TraceResult {
   };
   attribution: {
     name: string;
-    category: 'VASP' | 'Mixer' | 'Merchant' | 'Private';
+    category: 'VASP' | 'Mixer' | 'Merchant' | 'Private' | 'Unknown';
     confidenceTier: ConfidenceTier;
     sourceCitation: string;
     depositAddress: string;

@@ -183,6 +183,17 @@
   },
   "active": "61382515e01df130",
   "lastOpenFiles": [
+    "backend/tests/fixtures/_r5tmp/model_eval.json",
+    "backend/tests/fixtures/_r5tmp/feature_lookup.pkl",
+    "backend/tests/fixtures/_r5tmp/learned_model.joblib",
+    "backend/tests/fixtures/_r5tmp",
+    "backend/tests/fixtures/_r4tmp/model_eval.json",
+    "backend/tests/fixtures/_r4tmp/feature_lookup.pkl",
+    "backend/tests/fixtures/_r4tmp/learned_model.joblib",
+    "backend/tests/fixtures/_r4tmp",
+    "data/raw/elliptic_txs_features.csv",
+    "data/raw",
+    "brief_through_proxy.json",
     "node_modules/vary/README.md"
   ]
 }

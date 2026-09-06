@@ -52,6 +52,8 @@ Existing `data_ingestion/test_fixtures/` was not touched.
 
 ---
 
+---
+
 ## 2026-09-05 — Cline (verification agent) — temporal-leakage fix verified + hardening fixes
 
 **What changed:**
@@ -74,3 +76,40 @@ $ # fresh venv from backend/requirements.txt only:
 1. ROADMAP.md contains no entry for the temporal-leakage fix or the honesty-layer UI proposal — nothing to mark resolved there yet; tracking location needs a human decision.
 2. Honesty-layer UI implementation is a separate, not-yet-started task.
 3. Mixer-address validation set still a format placeholder (`data/mixers.txt` absent → `mixer_adjacent` cannot fire; union-recall numbers above computed under that condition).
+
+---
+
+## 2026-09-05 — Antigravity (implementation agent) — Phase R7 Integration & Production Fix
+
+**What changed:**
+- `src/App.tsx` [MODIFIED] — Fixed TS2304 bug in `handleTraceAddress` by adding `const result = outcome.trace;` definition before evaluating verdict and updating watchlist.
+- `server.ts` [VERIFIED] — Node/Express proxy endpoints `/api/trace` and `/api/clusters` verified communicating with Python FastAPI inference backend (`http://localhost:8000`).
+- `dist/server.mjs` [VERIFIED] — Production build compiled cleanly with `npm run build` and booted without CJS/ESM module crashes.
+
+**Claimed complete:**
+- Express server proxying to FastAPI backend with graceful fallback.
+- Live end-to-end trace flow returning real pipeline output (`source: "pipeline"`, `available: true`).
+- 56 Python backend unit tests passing cleanly.
+- TypeScript build check (`tsc --noEmit`) passing with 0 errors.
+
+**Verified how:**
+```
+$ backend/.venv/Scripts/python -m pytest backend/tests/
+56 passed in 3.65s
+
+$ cmd /c npx tsc --noEmit
+Passed (0 errors)
+
+$ cmd /c npm run build
+dist/server.mjs generated cleanly
+
+Live API Test:
+POST http://localhost:3000/api/trace -> returned source: "pipeline", available: true, data: { address, trace, rules, score, verdict }
+GET http://localhost:3000/api/clusters -> returned source: "pipeline"
+```
+
+**Still open / unverified:**
+- Real Kaggle dataset download pending user credentials; synthetic dataset currently used for local pipeline verification.
+- Phase R8 testing & hardening scheduled next per `BACKEND_BUILD_PLAN.md`.
+
+>>>>>>> Stashed changes

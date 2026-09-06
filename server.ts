@@ -71,6 +71,56 @@ Keep tone professional, strictly objective, and direct.`;
     }
   });
 
+  // Phase R7: the live trace flow. Proxies the reported wallet to the Python
+  // pipeline (R2 subgraph + R3 rules + R4 score + R5 verdict + R6 attribution)
+  // and composes one response. If the Python service is unavailable the
+  // response is an explicit fallback — the client decides what to show and
+  // never presents mock data as pipeline output.
+  app.post('/api/trace', async (req, res) => {
+    const { address, hopDepth } = req.body || {};
+    if (!address || typeof address !== 'string') {
+      return res.status(400).json({ error: 'address is required' });
+    }
+    const hop = Number.isFinite(hopDepth) ? Math.max(1, Math.min(10, Number(hopDepth))) : 2;
+    const pyBase = process.env.LEDGR_SERVICE_URL || 'http://localhost:8000';
+
+    const py = async (path: string, init?: RequestInit) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      try {
+        const r = await fetch(`${pyBase}${path}`, { signal: controller.signal, ...init });
+        if (!r.ok) throw new Error(`${path} -> ${r.status}`);
+        return await r.json();
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    try {
+      const [trace, rules, score, verdict, clusters] = await Promise.all([
+        py('/trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) }),
+        py('/rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) }),
+        py('/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address }) }).catch(() => null),
+        py('/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) }),
+        py('/clusters').catch(() => null),
+      ]);
+
+      const seedCluster = clusters?.clusters?.find((c: any) =>
+        (c.members_sample || []).includes(address)
+      );
+      return res.json({
+        source: 'pipeline',
+        available: true,
+        data: { address, hopDepth: hop, trace, rules, score, verdict, attribution: seedCluster?.attribution ?? null },
+      });
+    } catch (err: any) {
+      const note = err?.name === 'AbortError'
+        ? 'Python pipeline timed out — showing labeled offline mock data.'
+        : 'Python pipeline service unavailable — showing labeled offline mock data.';
+      return res.json({ source: 'fallback', available: false, note });
+    }
+  });
+
   // Phase R6: real cluster/attribution output from the Python pipeline (R6).
   // Falls back explicitly (never silently) when the Python service is down.
   app.get('/api/clusters', async (_req, res) => {

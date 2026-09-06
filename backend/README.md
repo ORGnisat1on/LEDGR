@@ -19,6 +19,24 @@ Download the **Elliptic** dataset CSVs from Kaggle into `data/raw/`
 (any subfolder layout): `elliptic_txs_features.csv`, `elliptic_txs_edgelist.csv`,
 `elliptic_txs_classes.csv` (+ optional Elliptic++ address files).
 
+The easiest way is via `kagglehub` (used for one-time dataset acquisition, not a
+runtime dependency of the inference service):
+
+```bash
+backend/.venv/Scripts/pip install kagglehub
+backend/.venv/Scripts/python -c "
+import kagglehub, shutil
+from pathlib import Path
+path = Path(kagglehub.dataset_download('ellipticco/elliptic-data-set'))
+# Unwrap the nested elliptic_bitcoin_dataset/ subdirectory if present
+src = next(path.rglob('elliptic_txs_features.csv')).parent
+Path('data/raw').mkdir(exist_ok=True)
+for f in src.glob('elliptic_txs_*.csv'):
+    shutil.copy(f, Path('data/raw') / f.name)
+print('Dataset copied to data/raw/')
+"
+```
+
 ## Mixer list (Phase R3)
 
 Copy `data/mixers.example.txt` → `data/mixers.txt` and fill in a sourced

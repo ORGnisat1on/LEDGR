@@ -15,13 +15,18 @@ import { MethodologyModal } from './components/MethodologyModal';
 import { InvestigationReportModal } from './components/InvestigationReportModal';
 
 import { CASE_STUDIES, INITIAL_WATCHLIST } from './data/mockCases';
-import { ForensicEngine } from './services/analyzer';
+import { ForensicEngine, runPipelineTrace } from './services/analyzer';
 import { TraceResult, WalletNode, WatchlistItem, Complaint } from './types';
-import { Search, ShieldAlert, ArrowRight, RefreshCw, FileText, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Search, ShieldAlert, ArrowRight, RefreshCw, FileText, CheckCircle2, AlertTriangle, Database } from 'lucide-react';
 
 export default function App() {
   const [activeCaseId, setActiveCaseId] = useState<string>('case-1');
   const [trace, setTrace] = useState<TraceResult>(CASE_STUDIES[0].trace);
+  // Where the current trace came from. 'mock' data is always labeled in the UI
+  // (R7): the live flow uses the real Python pipeline, and the mock engine is
+  // only an explicitly-offline fallback — never presented as pipeline output.
+  const [dataSource, setDataSource] = useState<'pipeline' | 'mock'>('mock');
+  const [dataNote, setDataNote] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<WalletNode | null>(null);
   const [hopFilter, setHopFilter] = useState<number>(4);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -51,16 +56,28 @@ export default function App() {
     const found = CASE_STUDIES.find(c => c.id === caseId);
     if (found) {
       setTrace(found.trace);
+      setDataSource('mock');
+      setDataNote('Pre-set demonstration case (mock data). Enter a wallet address to run the real pipeline.');
       setHopFilter(found.trace.hopDepth || 3);
     }
   };
 
-  // Run trace for custom address or complaint
+  // Run trace for custom address or complaint — live pipeline first, explicit
+  // mock fallback only when the Python service is unavailable (R7).
   const handleTraceAddress = async (address: string, customComplaint?: Complaint) => {
     setIsTracing(true);
     try {
-      const result = await ForensicEngine.traceAddress(address, hopFilter, customComplaint);
-      setTrace(result);
+      const outcome = await runPipelineTrace(address, hopFilter, customComplaint);
+      const result = outcome.trace;
+      if (outcome.source === 'pipeline') {
+        setTrace(outcome.trace);
+        setDataSource('pipeline');
+        setDataNote(null);
+      } else {
+        setTrace(outcome.trace);
+        setDataSource('mock');
+        setDataNote(outcome.note || 'Python pipeline unavailable — showing labeled offline mock data.');
+      }
       setActiveCaseId('custom');
 
       // Auto add confirmed/watch wallets to watchlist if not present
@@ -163,6 +180,27 @@ export default function App() {
               )}
             </button>
           </form>
+        </div>
+
+        {/* Data source banner: pipeline vs explicitly-labeled mock (R7) */}
+        <div className={`p-3 rounded-2xl border text-xs flex items-start gap-2 ${
+          dataSource === 'pipeline'
+            ? 'bg-teal-950/30 border-teal-800/60 text-teal-300'
+            : 'bg-amber-950/30 border-amber-800/60 text-amber-300'
+        }`}>
+          <Database className="w-4 h-4 mt-0.5 shrink-0" />
+          <div className="space-y-0.5">
+            <div className="font-bold uppercase tracking-wider">
+              {dataSource === 'pipeline'
+                ? 'Live pipeline output — real subgraph, rules, learned signal and correlation'
+                : 'Offline mock data — not live pipeline output'}
+            </div>
+            <p className="opacity-80">
+              {dataNote ?? (dataSource === 'pipeline'
+                ? 'Evaluated for the reported wallet; subgraph members are shown structurally (Elliptic carries no BTC amounts, so monetary fields are 0, not fabricated).'
+                : 'Run the backend pipeline and start the Python service to trace real wallets.')}
+            </p>
+          </div>
         </div>
 
         {/* Active Investigation Case Banner */}

@@ -1,4 +1,5 @@
-# synthetic test mixer list — NOT real addresses
+# synthetic test mixer list
+bc1qwasabi20coordinatorpool98234kjhsdf
 tx000000
 tx000001
 tx000002
