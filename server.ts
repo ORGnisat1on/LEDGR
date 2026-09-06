@@ -86,7 +86,7 @@ Keep tone professional, strictly objective, and direct.`;
 
     const py = async (path: string, init?: RequestInit) => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
       try {
         const r = await fetch(`${pyBase}${path}`, { signal: controller.signal, ...init });
         if (!r.ok) {
@@ -136,8 +136,8 @@ Keep tone professional, strictly objective, and direct.`;
         });
       }
       const note = err?.name === 'AbortError'
-        ? 'Python pipeline timed out — showing labeled offline mock data.'
-        : 'Python pipeline service unavailable — showing labeled offline mock data.';
+        ? 'Python pipeline timed out after 30 s — no new trace data is shown; the previous view (if any) remains on screen unchanged. Check that the backend is still running and retry.'
+        : 'Python pipeline service unreachable — no new trace data is shown; the previous view (if any) remains on screen unchanged. Start the backend with: cd backend && uvicorn ledgr.service:app --reload';
       return res.json({ source: 'fallback', available: false, note });
     }
   });
@@ -158,13 +158,13 @@ Keep tone professional, strictly objective, and direct.`;
       return res.json({
         source: 'fallback',
         available: false,
-        note: `Clustering service responded ${response.status} — showing labeled offline mock data.`,
+        note: `Clustering service responded ${response.status} — no cluster data is shown. Check the Python backend logs.`,
       });
     } catch {
       return res.json({
         source: 'fallback',
         available: false,
-        note: 'Python clustering service unavailable — showing labeled offline mock data.',
+        note: 'Python clustering service unreachable — no cluster data is shown. Start the backend with: cd backend && uvicorn ledgr.service:app --reload',
       });
     }
   });
