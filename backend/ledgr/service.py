@@ -1,12 +1,13 @@
 """Phase R2 (rebuilt as R3 prerequisite) — FastAPI inference service.
 
 Endpoints:
-  GET  /health   -> service + artifact status
-  POST /trace    -> {address (tx id or wallet), hop_depth} -> real local subgraph + stats
-  POST /rules    -> {address, hop_depth} -> per-heuristic rule-based signal (Phase R3)
-  POST /score    -> {address} -> learned-signal risk score (Phase R4, Module 3b)
-  POST /verdict  -> {address, hop_depth} -> confirmed/watch/none correlation (Phase R5)
-  GET  /clusters -> Phase R6 cluster report (confidence tiers + attribution)
+  GET  /health         -> service + artifact status
+  POST /trace          -> {address (tx id or wallet), hop_depth} -> real local subgraph + stats
+  POST /rules          -> {address, hop_depth} -> per-heuristic rule-based signal (Phase R3)
+  POST /score          -> {address} -> learned-signal risk score (Phase R4, Module 3b)
+  POST /verdict        -> {address, hop_depth} -> confirmed/watch/none correlation (Phase R5)
+  GET  /clusters       -> Phase R6 Elliptic-derived cluster report (confidence tiers + attribution)
+  GET  /clusters/live  -> Phase R6 live-UTXO clusters for one address (TIER_LIVE_UTXO, R10 wiring)
 
 The Node backend (server.ts) will call these endpoints (Phase R7 wiring).
 """
@@ -18,7 +19,9 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .cluster import load_cluster_report
+from .blockstream_client import BlockstreamClient
+from .cluster import build_live_clusters, load_cluster_report
+from .config import LIVE_MAX_TXS_PER_ADDRESS
 from .config import live_tracing_enabled
 from .correlate import VERDICT_WATCH, correlate
 from .graph import load_graph_index, local_subgraph
@@ -261,3 +264,54 @@ def clusters() -> dict:
             status_code=503,
             detail="Cluster report unavailable. Run scripts/build_clusters.py first.",
         ) from e
+
+
+class LiveClusterRequest(BaseModel):
+    address: str = Field(..., min_length=1, description="Live Bitcoin address to cluster")
+
+
+@app.get("/clusters/live")
+def clusters_live(address: str) -> dict:
+    """Phase R6 live-UTXO clustering (TIER_LIVE_UTXO) for one address.
+
+    Calls BlockstreamClient().iter_address_internal_txs() — the same Module-1
+    method already tested in test_live_clients.py — then passes the resulting
+    InternalTx list to build_live_clusters().
+
+    Cost note: up to LIVE_MAX_TXS_PER_ADDRESS additional GET /tx/{txid} calls
+    beyond the /trace path (which uses the cheaper tx-summary endpoint). This
+    is acceptable for single-wallet demo use per SCOPE.md; not for bulk tracing
+    (already out of scope).
+
+    The DiGraph used by /trace and /verdict is separate and unchanged — the
+    undirected clustering graph is never passed to run_rules().
+    """
+    if not live_tracing_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Live tracing is disabled (set LEDGR_LIVE_TRACING=1 to enable).",
+        )
+    try:
+        internal_txs = list(
+            BlockstreamClient().iter_address_internal_txs(
+                address, max_txs=LIVE_MAX_TXS_PER_ADDRESS
+            )
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Live block-explorer fetch failed for {address}: {e}",
+        ) from e
+    live_clusters = build_live_clusters(internal_txs)
+    return {
+        "address": address,
+        "source": "live-traced-utxo",
+        "confidence_tier": "live-traced-utxo",
+        "n_clusters": len(live_clusters),
+        "clusters": live_clusters,
+        "cost_note": (
+            f"Up to {LIVE_MAX_TXS_PER_ADDRESS} extra GET /tx/{{txid}} calls were made "
+            "to build full UTXO structure. Acceptable for single-wallet demo use; "
+            "not supported for bulk tracing (out of scope per SCOPE.md)."
+        ),
+    }

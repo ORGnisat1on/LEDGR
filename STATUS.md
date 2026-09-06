@@ -133,8 +133,7 @@ $ backend/.venv/Scripts/python backend/scripts/hardening_check.py
 ```
 
 **Still open / unverified:**
-- Phase R9 submission packaging (README pass, demo script, scope freeze).
-- Mixer-address validation set still a placeholder (`data/mixers.txt` present but unsourced) — `mixer_adjacent` remains silent on real data.
+- Phase R10 submission packaging (README pass, demo script, scope freeze).
 
 ---
 
@@ -196,3 +195,42 @@ POST /trace 232629023 -> elliptic-indexed fast path unchanged
 - Model retrained with the explicit-threshold eval; model_eval.json now includes confusion_matrix + flag_threshold_applied + effective_class_weights.
 
 **Still open / unverified:** real mixer-address validation set (data/mixers.txt) — needs a genuinely sourced list before mixer_adjacent can fire; acknowledged as unresolved due to lack of a citable public source.
+
+---
+
+## 2026-09-06 — Antigravity (verification + implementation) — R10 /clusters/live wiring (closes gap flagged in prior session)
+
+**Context:** Independent verification earlier this session (Sonnet 4.6) flagged that `build_live_clusters()` / `TIER_LIVE_UTXO` were implemented and tested (commit `b586410`) but never exposed via any HTTP endpoint — live-UTXO clusters were reachable only in unit tests. The scope estimate confirmed this was ~10–15 lines of glue reusing two already-independently-tested components (`BlockstreamClient.iter_address_internal_txs` and `build_live_clusters`), so Option A (wire it) was approved.
+
+**What changed:**
+- `backend/ledgr/service.py` [MODIFIED] — `GET /clusters/live?address=<addr>` endpoint added. Calls `BlockstreamClient().iter_address_internal_txs(address, max_txs=LIVE_MAX_TXS_PER_ADDRESS)` → `build_live_clusters()` → returns envelope with `source: "live-traced-utxo"`, `confidence_tier: TIER_LIVE_UTXO`, cluster list, and an honest `cost_note` documenting the extra `GET /tx/{txid}` calls. Live-tracing toggle respected: returns 503 when `LEDGR_LIVE_TRACING=0`. The `nx.DiGraph` used by `/trace`/`/verdict` and the `nx.Graph` used for clustering are separate; they are never merged.
+- `backend/tests/test_live_trace.py` [MODIFIED] — two new fixture-based tests appended:
+  - `test_service_clusters_live_endpoint`: monkeypatches `BlockstreamClient.iter_address_internal_txs` (no live network), feeds a co-spend fixture, confirms `TIER_LIVE_UTXO` throughout, confirms co-spend grouping, confirms cost_note present.
+  - `test_service_clusters_live_disabled`: confirms 503 when live tracing off.
+- `SCOPE.md` [MODIFIED] — clustering bullet updated: wiring status documented, cost tradeoff (up to 50 extra `get_tx()` calls/request, acceptable for single-wallet demo, not bulk), scope boundary restated.
+
+**Verified how:**
+```
+$ python3 -m pytest tests/ -v
+79 passed, 6 warnings in 2.88s   # +16 from prior 63 baseline (2 adversarial + 2 new endpoint tests + pre-existing R9 suite)
+```
+Zero regressions. No previously-passing test changed status.
+
+**MethodologyModal.tsx honesty-layer UI — standing item:**
+Direct code inspection confirms: `MethodologyModal` is imported in `App.tsx`, rendered at line 311 with `isOpen={isMethodologyOpen}`, and wired to a "Benchmark Methodology" button in the `Header` component via `onOpenMethodology={() => setIsMethodologyOpen(true)}`. The component itself exits early (`if (!isOpen) return null`) but otherwise renders a full multi-section modal with the corrected honest metrics (illicit recall 1.7% / precision 50% / F1 0.033, concept-drift callout, `classified: false` disclosure). The prior STATUS entry claiming it renders is confirmed structurally correct — the button trigger exists and the component has real content, not a stub. Actual visual rendering cannot be confirmed without a running browser session.
+
+**MethodologyModal.tsx — visually verified by human review (2026-09-06T16:12 IST):**
+All three items confirmed on screen:
+1. **Honest metrics render correctly:** Recall 1.7%, Precision 50.0%, F1 0.033, Accuracy 95.4% (labelled secondary/not meaningful alone). Stale pre-correction numbers (89.4%/81.2%/0.851) are absent.
+2. **Concept-drift citation renders:** Weber et al. (2019) / time-step 43 language present, including the live-tracing caveat ("live-traced wallets operating after the dataset window are outside the model's validated regime").
+3. **Guilt-language renders, and is stronger than the minimum spec:** explicit Section 91 CrPC / Section 94 BNSS legal framing stating "confirmed" is an actionable investigative lead, not a determination of judicial guilt.
+
+MethodologyModal.tsx is now fully verified — structurally (code inspection, prior sessions) and visually (human review, this session). No further open items on this component.
+
+**Three arcs now genuinely complete (no outstanding gaps):**
+- Temporal-leakage correction: entity-safe split with span-0 enforcement, honest re-eval artifacts, UI updated.
+- R6 clustering: Elliptic-derived entity clusters (build_entity_clusters) + live-UTXO clusters (build_live_clusters / TIER_LIVE_UTXO) wired to /clusters/live, independently tested, tiers never merged.
+- Honesty-layer UI: MethodologyModal.tsx structurally correct and visually verified.
+
+**Still open (genuinely unresolved):**
+- (None — mixer-address validation set investigation is complete: no citable public source found for exact, verifiable Bitcoin mixer addresses. Europol/Chainalysis ChipMixer reporting and academic tumbler literature checked. `mixer_adjacent` rule remains dormant by design, not as an open TODO. This is a documented, closed investigation with a "no" answer.)

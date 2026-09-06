@@ -269,3 +269,80 @@ def test_service_live_api_failure_is_503(monkeypatch):
     r = client.post("/trace", json={"address": "bc1qanything", "hop_depth": 1})
     assert r.status_code == 503
     assert "Live block-explorer API failed" in r.json()["detail"]
+
+
+# --- /clusters/live endpoint (R10 wiring) ------------------------------------
+
+
+def test_service_clusters_live_endpoint(monkeypatch):
+    """GET /clusters/live returns TIER_LIVE_UTXO clusters built from InternalTx.
+
+    Monkeypatches BlockstreamClient.iter_address_internal_txs so no live network
+    is needed.  The fixture has two inputs in the same tx (co-spend) so they
+    must land in one cluster — this confirms the full path:
+      iter_address_internal_txs -> build_live_clusters -> endpoint response.
+    """
+    from ledgr.live_types import InternalTx, TxIn, TxOut
+    from ledgr.cluster import TIER_LIVE_UTXO, TIER_ELLIPTIC, TIER_SUPPLEMENTARY
+
+    client = _make_client(monkeypatch)
+    monkeypatch.setenv("LEDGR_LIVE_TRACING", "1")
+
+    # Two inputs co-spending in one tx: addr_a and addr_b should cluster together.
+    fake_internal_txs = [
+        InternalTx(
+            tx_hash="a" * 64,
+            timestamp=1_700_000_000,
+            block_height=800_000,
+            inputs=(
+                TxIn(txid="b" * 64, vout=0, address="addr_a", amount_sats=500),
+                TxIn(txid="c" * 64, vout=0, address="addr_b", amount_sats=300),
+            ),
+            outputs=(TxOut(address="addr_out", amount_sats=800),),
+        )
+    ]
+
+    monkeypatch.setattr(
+        "ledgr.service.BlockstreamClient.iter_address_internal_txs",
+        lambda self, address, max_txs=None: iter(fake_internal_txs),
+    )
+
+    r = client.get("/clusters/live", params={"address": "addr_a"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    # Top-level envelope fields
+    assert body["source"] == "live-traced-utxo"
+    assert body["confidence_tier"] == "live-traced-utxo"
+    assert body["confidence_tier"] == TIER_LIVE_UTXO
+    assert isinstance(body["n_clusters"], int)
+    assert body["n_clusters"] >= 1
+
+    # All clusters carry TIER_LIVE_UTXO — never elliptic-derived or supplementary-source
+    for c in body["clusters"]:
+        assert c["confidence_tier"] == TIER_LIVE_UTXO
+        assert c["confidence_tier"] != TIER_ELLIPTIC
+        assert c["confidence_tier"] != TIER_SUPPLEMENTARY
+
+    # Co-spend: addr_a and addr_b must be in the same cluster
+    cospend = next(
+        (c for c in body["clusters"] if "addr_a" in c["members_sample"]),
+        None,
+    )
+    assert cospend is not None, "addr_a must appear in some cluster"
+    assert "addr_b" in cospend["members_sample"], (
+        "addr_a and addr_b co-spent in the same tx — must be in the same cluster"
+    )
+
+    # Cost note is present and mentions the tx cap
+    assert "cost_note" in body
+    assert "50" in body["cost_note"]  # LIVE_MAX_TXS_PER_ADDRESS
+
+
+def test_service_clusters_live_disabled(monkeypatch):
+    """/clusters/live returns 503 when LEDGR_LIVE_TRACING=0."""
+    client = _make_client(monkeypatch)
+    monkeypatch.setenv("LEDGR_LIVE_TRACING", "0")
+    r = client.get("/clusters/live", params={"address": "addr_a"})
+    assert r.status_code == 503
+    assert "disabled" in r.json()["detail"].lower()

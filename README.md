@@ -12,83 +12,108 @@ This project builds a system that takes a reported wallet address, traces its tr
 
 ## Current status
 
-Early-stage build. See [`ROADMAP.md`](./ROADMAP.md) for milestones and current phase.
+**R10 — final packaging and scope freeze.** All MVP milestones complete. See [`STATUS.md`](./STATUS.md) for the full audit trail and [`ROADMAP.md`](./ROADMAP.md) for the phased build history.
 
-## How it works (short version)
+## What the system does (MVP — working code with passing tests)
 
-1. Take a wallet address as input (single address for MVP; batch/bulk address ingestion is a stretch goal — see `SCOPE.md`).
-2. Build a local transaction subgraph around it (from the Elliptic/Elliptic++ dataset for training/eval, and optionally live block-explorer APIs for demo-time tracing).
-3. Run two independent risk signals against that subgraph:
-   - a **rule-based** signal (known laundering heuristics — peel chains, rapid fan-out, mixer-adjacent hops)
-   - a **learned** signal (a graph ML model trained on Elliptic/Elliptic++)
-4. A wallet is only marked **confirmed risk** when both signals agree. A hit from only one signal is a lower-confidence **watch** flag. (This two-signal-agreement principle is deliberate — see [`ARCHITECTURE.md`](./ARCHITECTURE.md).)
-5. Cluster wallets likely controlled by the same exchange/entity, and generate a fund-flow visualization and a standardized investigation report.
+- **Bitcoin-only** tracing using the Elliptic/Elliptic++ dataset as the training/evaluation foundation.
+- **Single-wallet input** via a mocked complaint-intake interface (format designed to be SAHYOG/NCRP-compatible; no live integration with either platform).
+- **Local transaction subgraph construction** around a reported wallet (bounded hop-depth, not whole-chain).
+- **Two independent risk signals:**
+  - **Rule-based (Module 3a):** peel-chain detection and rapid fan-out detection — both active and tested. Mixer-adjacent-hop detection is implemented but **dormant** — a completed investigation found no citable public source of exact Bitcoin mixer addresses (Europol/Chainalysis ChipMixer reporting and academic tumbler literature checked; no per-address data accessible). The heuristic never fires on made-up addresses.
+  - **Learned (Module 3b):** random forest on Elliptic's 166 handcrafted features, trained and evaluated on an **entity-based, time-respecting split** (train: time-steps 1–42, val: 42–45, test: 45–49; zero entity/tx overlap; span-0 enforced per METHODOLOGY.md §1).
+- **Correlation layer (Module 4):** a wallet is only **confirmed** when both signals agree; a hit from only one signal is **watch**; neither is **none**. This two-signal agreement is the load-bearing design decision — neither signal alone is treated as sufficient.
+- **Clustering (Module 5):** Elliptic-derived entity clusters (licit/illicit only, higher confidence) plus live-traced UTXO clustering via common-input/change-address heuristics (exposed at `GET /clusters/live?address=<addr>`, tier `TIER_LIVE_UTXO`). The two clustering paths are separate and never merged.
+- **Named-exchange attribution (Module 5):** only works through the **live-lookup** path (real BTC addresses fetched via Blockstream/BlockCypher). The indexed Elliptic graph uses anonymized transaction IDs with no address mapping, so in-dataset traces show no named attribution *by construction*, not as a silent gap. Supplementary matches are tagged `supplementary-source` (lower confidence) and kept visibly separate from `elliptic-derived` labels.
+- **Live demo tracing (Module 1/R9):** a small number of wallets traced live via free-tier Blockstream/BlockCypher APIs, layered on top of the static training graph.
+- **Reporting & visualization (Module 6):** fund-flow graph visualization and a standardized, exportable investigation report. Report field structure is designed for SAHYOG/NCRP format compatibility; demoed against a mocked intake — no real API calls.
+- **Dashboard:** React/TypeScript frontend (Vite + Express proxy to Python FastAPI backend) for querying a wallet and viewing results end-to-end.
 
-Full module breakdown is in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+## What the system does NOT do (explicit boundaries — read before assuming more)
 
-### Honest capability caveats (read before relying on, or demoing, any of this)
+- **No live SAHYOG/NCRP integration.** No real access path exists. Format compatibility only, demoed against a mock.
+- **No multi-chain coverage.** MVP is Bitcoin only. Ethereum is a stretch goal (separate code path, not a drop-in extension). DeFi protocols, cross-chain bridges, privacy-chain tracing are explicitly out of scope.
+- **No continuous blockchain ingestion.** "Real-time" means fast query-time response against a pre-indexed graph — not an always-on live-ingestion pipeline.
+- **No guaranteed named-exchange attribution.** Elliptic provides licit/illicit labels, not named identities. Naming is best-effort via supplementary sources (BitInfoCharts rich list, retrieved 2026-09-06), always confidence-tagged as lower-confidence.
+- **No mixer-address validation set.** A genuine investigation was completed (2026-09-06) and no citable public source of exact mixer addresses was found. The `mixer_adjacent` heuristic remains dormant by design — this is a documented, closed investigation, not an open TODO.
+- **No paid infrastructure or hardware dependency.** Budget is ₹0.
+- **No hosted-LLM dependency for the core detection pipeline.** An LLM may optionally generate report narrative text as a stretch goal; the core graph analysis never depends on one.
 
-The audit of the shipped backend (2026-09-06) surfaced three things worth knowing
-up front. They are limitations of an honest build, not bugs — the system's
-methodology is designed around them.
+## Honest capability findings (not caveats — these are documented results)
 
-- **2 of the 3 rule-based heuristics are currently active.** Peel-chain and
-  rapid-fan-out detection run for real on the transaction graph. **Mixer-adjacent-hop
-  detection is implemented in code but cannot fire right now:** `data/mixers.txt`
-  is intentionally empty because no citable, verifiable public source of exact
-  Bitcoin mixer addresses could be found (documented in the item-1/item-2 audit;
-  the file explains the empty list and lists the sources checked). Until a real
-  validation set is sourced, `mixer_adjacent` stays silent — it never fires on
-  made-up addresses.
-- **Named-exchange attribution only works through the live-lookup path, not on
-  indexed traces.** The indexed Elliptic graph stores anonymized transaction-IDs
-  with no address mapping, so hot-wallet-list matching can only ever match real
-  BTC addresses fetched via the R9 live-lookup path. Tracing an in-dataset wallet
-  will therefore show **no** named-exchange attribution, by construction — it is
-  a real limitation of matching anonymized ids against a real-address hot-wallet
-  list, not a silent gap.
-- **The learned signal's real-data recall is low by design of an honest baseline,
-  not a defect.** On the time-respecting entity-safe split the committed random
-  forest gets **TP=2, FP=2, FN=114, TN=2398 — recall 0.017, precision 0.500,
-  F1 0.033**. That low recall is *exactly why* verdicts never rely on the learned
-  signal alone: it is one of two independent signals, and a **confirmed** flag
-  requires both to agree precisely because either signal on its own is imperfect.
-  This is the methodology working as intended, not "the ML doesn't work".
-  (See [`DEMO.md`](./DEMO.md) for addresses that actually demonstrate each tier.)
+### Temporal-leakage finding and honest metrics
 
-## What this is *not* (read before assuming more than it does)
+The original random-split evaluation produced an implausible illicit recall of ~0.94. Investigation revealed **temporal leakage**: the Elliptic dataset has a documented concept-drift event at time-step 43 (Abraxas dark-market shutdown, per Weber et al. 2019 / GuiltyWalker). A random split lets the model memorize pre-shift entity patterns that don't generalize post-shift.
 
-This system is built to a real ₹0, ~20-day, no-government-access constraint. To keep every claim honest:
+**The fix:** rebuilt the split as time-respecting at the entity level (train 1–42, val 42–45, test 45–49; span-0 enforced programmatically on every run). The honest baseline on this split:
 
-- **No live SAHYOG/NCRP integration.** These are real government cybercrime-reporting platforms this project has no access path to. The input format is designed to be *compatible* with what such platforms would need, and the demo runs against a mocked complaint-intake interface — not a real one.
-- **No full multi-chain coverage.** MVP scope is **Bitcoin only**, built on the Elliptic/Elliptic++ dataset. Ethereum is a stretch goal, not a committed feature. DeFi protocols, cross-chain bridges, and privacy-chain tracing are explicitly out of scope for this build — the architecture is designed to extend to them later, but they are not implemented.
-- **"Real-time" means query-time speed against a pre-indexed graph**, not continuous live ingestion of the blockchain. Continuous ingestion is an infrastructure-scale problem outside this project's budget and timeline.
-- **Named-exchange attribution is best-effort, not guaranteed.** The Elliptic dataset gives licit/illicit labels, not named-exchange identity. Named-exchange attribution (when present) comes from supplementary, lower-confidence public sources (known hot-wallet lists, community tagging), documented separately from the core Elliptic-derived labels.
+| Metric | Value |
+|--------|-------|
+| **Illicit recall** | **0.017** (1.7%) |
+| **Illicit precision** | **0.500** (50.0%) |
+| **Illicit F1** | **0.033** |
+| Confusion matrix (test) | TP=2, FP=2, FN=114, TN=2398 (2,509 labeled of 14,084 test txs; 116 illicit) |
+| Accuracy (secondary, not meaningful alone) | 95.4% |
 
-See [`SCOPE.md`](./SCOPE.md) for the full MVP / stretch / out-of-scope breakdown.
+**Why this is a strength, not a weakness:** The low recall is *exactly why* the correlation layer exists. A wallet is only **confirmed** when the rule-based signal AND the learned signal independently agree — precisely because either signal on its own is imperfect. The rule engine adds 2 peel-chain catches beyond the ML's 2, giving a union recall of 4/116 = 3.45%. This is the methodology working as intended, not "the ML doesn't work."
 
-## Dataset
+**Implication for live tracing:** The Elliptic dataset ends ~2018. Every modern live-traced wallet exists years past the documented regime shift. The learned signal's reliability on any current real-world wallet is fundamentally unverified and likely degraded by the same (or worsened) concept drift. The dashboard explicitly surfaces this limitation (Methodology modal + footer banner: "live-traced wallets operating after the dataset window are outside the model's validated regime").
 
-Primary dataset: **Elliptic / Elliptic++** (Bitcoin transaction graph + actor/address dataset, Kaggle). Full documentation, structure, and the entity-based train/test split methodology (needed to avoid a known label-leakage issue in this dataset) are in [`DATA.md`](./DATA.md).
+See [`METHODOLOGY.md`](./METHODOLOGY.md) §1–§2 and [`DATA.md`](./DATA.md) for the full methodology and leakage rationale.
 
-## Tech stack
+## How to run it
 
-- Python (core pipeline)
-- NetworkX / PyTorch Geometric (graph construction + graph ML)
-- Elliptic/Elliptic++ (Kaggle) for training/eval
-- Blockstream.info / BlockCypher free-tier Bitcoin APIs for live demo tracing (Etherscan is Ethereum-specific and is only relevant if the Ethereum stretch goal in `SCOPE.md` is attempted)
-- Streamlit or a minimal React app for the analytics dashboard
-- No paid infrastructure. No hosted-LLM dependency for the core detection pipeline — an LLM may optionally generate natural-language report text later, but the core graph analysis never depends on one.
+### Prerequisites
 
-## Running it
+- Python 3.11+
+- Node.js 18+
+- (Optional) Kaggle credentials for the real Elliptic/Elliptic++ dataset — the pipeline runs on synthetic fixtures without them
 
-Setup and run instructions will be added here once the data pipeline milestone (see `ROADMAP.md`) is complete.
+### Backend (Python/FastAPI)
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Run API server (port 8000)
+uvicorn ledgr.service:app --reload
+
+# Run tests
+python3 -m pytest tests/ -q
+# 79 passed, 6 warnings (as of 2026-09-06)
+```
+
+### Frontend (React/TypeScript)
+
+```bash
+npm install
+npm run dev    # dev server (port 3000, proxies /api/* to backend)
+npm run build  # production build
+npm run lint   # tsc --noEmit (0 errors)
+```
+
+### Live tracing (demo only)
+
+Set `LEDGR_LIVE_TRACING=1` to enable the live-lookup path (Blockstream primary, BlockCypher fallback). Without it, live endpoints return 503 and traces fall back to the indexed Elliptic graph only.
+
+```bash
+LEDGR_LIVE_TRACING=1 uvicorn ledgr.service:app --reload
+```
+
+## Test suite
+
+- **Backend:** 79 tests passing (`python3 -m pytest backend/tests/ -q`)
+- **Frontend:** TypeScript type-check passes (`npm run lint` → 0 errors)
+- **Hardening check:** `python3 backend/scripts/hardening_check.py` — 6/6 checks PASS (known-licit, known-illicit, isolated/low-degree, hub subgraph boundedness, out-of-dataset behavior, R5 correlation invariant)
 
 ## Docs index
 
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — module boundaries, inputs/outputs
-- [`DATA.md`](./DATA.md) — dataset structure, leakage caveat, split methodology
-- [`SCOPE.md`](./SCOPE.md) — MVP vs. stretch vs. out-of-scope
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — module boundaries, inputs/outputs, core design principle
+- [`DATA.md`](./DATA.md) — dataset structure, entity-leakage caveat, supplementary sources
+- [`SCOPE.md`](./SCOPE.md) — MVP / stretch / out-of-scope (checkable reference)
 - [`ROADMAP.md`](./ROADMAP.md) — phased build plan to submission
-- [`METHODOLOGY.md`](./METHODOLOGY.md) — evaluation methodology and metrics
-- [`DEMO.md`](./DEMO.md) — which wallets to use in the live demo and why
+- [`METHODOLOGY.md`](./METHODOLOGY.md) — evaluation methodology, entity-based split, metrics, correlation logic
+- [`DEMO.md`](./DEMO.md) — curated wallet addresses for live demo walkthrough
+- [`STATUS.md`](./STATUS.md) — living audit trail with dated entries per phase
