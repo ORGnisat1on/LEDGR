@@ -89,7 +89,11 @@ Keep tone professional, strictly objective, and direct.`;
       const timeoutId = setTimeout(() => controller.abort(), 8000);
       try {
         const r = await fetch(`${pyBase}${path}`, { signal: controller.signal, ...init });
-        if (!r.ok) throw new Error(`${path} -> ${r.status}`);
+        if (!r.ok) {
+          const err: any = new Error(`${path} -> ${r.status}`);
+          err.status = r.status;
+          throw err;
+        }
         return await r.json();
       } finally {
         clearTimeout(timeoutId);
@@ -114,6 +118,23 @@ Keep tone professional, strictly objective, and direct.`;
         data: { address, hopDepth: hop, trace, rules, score, verdict, attribution: seedCluster?.attribution ?? null },
       });
     } catch (err: any) {
+      // A 404 from the pipeline means the wallet is simply not in the ingested
+      // Elliptic dataset — an honest, expected outcome (e.g. any real BTC
+      // address, since Elliptic nodes are anonymized tx-ids). This is NOT a
+      // service failure and must not trigger the offline-mock fallback.
+      if (err?.status === 404) {
+        return res.json({
+          source: 'pipeline',
+          available: true,
+          data: {
+            address,
+            hopDepth: hop,
+            found: false,
+            note: 'Wallet not present in the ingested Elliptic dataset — no trace, rule signal, or verdict exists for it, and the learned signal reports it as classified:false (no risk is fabricated).',
+            score: { wallet: address, classified: false, risk_score: null, prediction: null, learned_flag: false },
+          },
+        });
+      }
       const note = err?.name === 'AbortError'
         ? 'Python pipeline timed out — showing labeled offline mock data.'
         : 'Python pipeline service unavailable — showing labeled offline mock data.';
