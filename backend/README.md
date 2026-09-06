@@ -118,6 +118,24 @@ frontend `BulkConvergenceView` renders this real output with the two tiers
 visibly distinguishable (teal vs amber badges) and falls back to clearly-labeled
 mock data only when the Python service is unavailable.
 
+## Live address tracing (Phase R9)
+
+Real BTC addresses pasted into the dashboard will almost never match Elliptic's
+anonymized node ids. On an indexed miss, the service falls back to a **bounded
+live lookup**: Blockstream.info (primary) / BlockCypher (fallback) fetch the
+most recent `LIVE_MAX_TXS_PER_ADDRESS` (50) transactions for the seed (plus up
+to `LIVE_MAX_COUNTERPARTY_FETCHES` (25) counterparty addresses when
+`hop_depth > 1`), an ad-hoc address graph is built, and the **rule-based
+engine (R3) runs on it** — heuristics need no training data. The learned signal
+(R4) has no feature vector for a live address and stays honestly
+`classified: false`; the verdict is therefore **capped at `watch` in code**
+(`confirmed` requires two independent signals). Response payloads carry
+`source: elliptic-indexed | live-lookup | not-found-on-chain` so the UI never
+blurs where a result came from. Failure modes are distinct: bad/unused address
+(200, honest), live-API failure (503). Live tracing is demo-time only per
+`SCOPE.md` — one address at a time, free-tier caps; disable with
+`LEDGR_LIVE_TRACING=0`.
+
 ## Tests
 
 ```bash

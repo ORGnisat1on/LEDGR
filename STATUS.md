@@ -135,3 +135,31 @@ $ backend/.venv/Scripts/python backend/scripts/hardening_check.py
 **Still open / unverified:**
 - Phase R9 submission packaging (README pass, demo script, scope freeze).
 - Mixer-address validation set still a placeholder (`data/mixers.txt` present but unsourced) — `mixer_adjacent` remains silent on real data.
+
+---
+
+## 2026-09-06 — Cline (implementation agent) — Phase R9 Live Address Tracing
+
+**What changed:**
+- `backend/ledgr/live_graph.py` [NEW] — R9 live tracing: Blockstream-primary/BlockCypher-fallback fetching (reuses Module-1 clients), pure `build_live_graph` over fetched summaries, bounded orchestrator (`trace_live`) with named caps in config (`LIVE_MAX_TXS_PER_ADDRESS=50`, `LIVE_MAX_COUNTERPARTY_FETCHES=25`, `LIVE_MAX_NODES=500`, `LIVE_TIME_STEP_SECONDS`), `LiveSourceError` with distinct `kind` (api-error vs bad-address), toggle `live_tracing_enabled()` (LEDGR_LIVE_TRACING env).
+- `backend/ledgr/service.py` [MODIFIED] — /trace, /rules, /verdict: indexed fast path then live fallback; response `source` field (elliptic-indexed | live-lookup | not-found-on-chain); learned signal honestly unavailable on live wallets (`ml_signal` note); correlation cap enforced in code (live verdicts can never be confirmed).
+- `backend/ledgr/blockstream_client.py` [MODIFIED] — added `get_address_stats()` (cheap has-history pre-check support).
+- `backend/ledgr/config.py` [MODIFIED] — R9 named constants + toggle.
+- `backend/tests/test_live_trace.py` [NEW] — 12 fixture-based tests: high-tx cap, low-tx, nonexistent, api-failure, bad-address, correlation cap, service-level live paths. No live network in CI.
+- `backend/scripts/hardening_check.py` [MODIFIED] — pins LEDGR_LIVE_TRACING=0 so its out-of-dataset 404 assertions stay deterministic/offline.
+- `backend/README.md` [MODIFIED] — live-tracing documented.
+
+**Verified how:**
+```
+$ backend/.venv/Scripts/python -m pytest backend/tests -q   # 72 passed
+$ # live smoke (single addresses, demo-time per SCOPE.md):
+POST /trace 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa -> live-lookup, real counterparties
+POST /trace 34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo -> live-lookup (Binance cold wallet)
+POST /verdict 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa -> capped at watch ceiling, learned classified:false
+POST /trace <invalid address> -> 200 not-found-on-chain (honest, not a 503)
+POST /trace 232629023 -> elliptic-indexed fast path unchanged
+```
+
+**Still open / unverified:**
+- Phase R10 submission packaging (README pass, demo script, scope freeze).
+- Live fetches are Blockstream free-tier: caps keep a single trace well under rate limits, but bulk tracing of many live addresses in one session would violate SCOPE.md and is not supported.

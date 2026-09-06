@@ -113,3 +113,20 @@ CLUSTER_REPORT_FILE = "clusters.json"
 # Max member wallets listed per cluster in the report (full membership is the
 # entity_id grouping; the sample keeps the API payload bounded).
 CLUSTER_MEMBER_SAMPLE = 10
+
+# --- Phase R9: live address tracing (out-of-dataset wallets) ---
+# Live tracing is demo-time only (SCOPE.md): on-demand fetch of a small, bounded
+# window around ONE reported address — never continuous ingestion, never bulk.
+# Free-tier APIs (Blockstream primary, BlockCypher fallback) — hard caps keep us
+# far from rate limits. Disable entirely with LEDGR_LIVE_TRACING=0.
+LIVE_MAX_TXS_PER_ADDRESS = 50  # most recent N txs fetched per address (Binance-scale wallets)
+LIVE_MAX_COUNTERPARTY_FETCHES = 25  # max extra address fetches beyond the seed (hop_depth > 1)
+LIVE_MAX_NODES = 500  # hard cap on the ad-hoc live subgraph size
+# Elliptic time steps are ~2 weeks; live block timestamps are mapped to the same
+# granularity so the R3 time-window heuristics keep their documented semantics.
+LIVE_TIME_STEP_SECONDS = 14 * 24 * 3600
+
+
+def live_tracing_enabled() -> bool:
+    """Live tracing toggle (LEDGR_LIVE_TRACING env, default on)."""
+    return os.environ.get("LEDGR_LIVE_TRACING", "1") != "0"

@@ -89,6 +89,23 @@ class BlockstreamClient:
         resp = self._request("GET", f"address/{address}/txs")
         return resp.json()
 
+    def get_address_stats(self, address: str) -> dict:
+        """
+        Get address statistics (GET /address/{address}).
+
+        Returns dict with chain_stats/mempool_stats tx counts — used to
+        distinguish an unused/unknown address (zero txs) from one with history
+        BEFORE spending calls on its transaction list (Phase R9).
+        """
+        resp = self._request("GET", f"address/{address}")
+        body = resp.json()
+        chain = body.get("chain_stats", {})
+        mempool = body.get("mempool_stats", {})
+        return {
+            "tx_count": (chain.get("funded_txo_count", 0) or 0) + (mempool.get("funded_txo_count", 0) or 0),
+            "raw": body,
+        }
+
     def get_tx(self, txid: str) -> dict:
         """
         Get full transaction details including vin/vout with addresses and amounts.

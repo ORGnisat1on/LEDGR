@@ -37,6 +37,10 @@ RANDOM_SEED = 42  # named constant; sampling only, no metric tuning
 
 
 def main() -> int:
+    # Keep this check deterministic/offline: out-of-dataset assertions expect the
+    # loud 404 path, which requires live tracing disabled (live lookups hit real
+    # network APIs — never in an automated check).
+    os.environ["LEDGR_LIVE_TRACING"] = "0"
     with TestClient(svc.app) as client:  # context manager runs startup hooks (loads real artifacts)
         return run_checks(client)
 
