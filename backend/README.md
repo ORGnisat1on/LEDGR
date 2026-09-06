@@ -51,6 +51,7 @@ backend/.venv/Scripts/python backend/scripts/sanity_check_subgraph.py  # R2 subg
 backend/.venv/Scripts/python backend/scripts/validate_rules.py  # R3 validation
 backend/.venv/Scripts/python backend/scripts/train_model.py     # R4 trained signal
 backend/.venv/Scripts/python backend/scripts/build_clusters.py  # R6 clusters + attribution
+backend/.venv/Scripts/python backend/scripts/hardening_check.py # R8 edge-case hardening check
 backend/.venv/Scripts/uvicorn ledgr.service:app --app-dir backend --port 8000
 # POST /trace   {"address": "...", "hop_depth": 2} -> subgraph + stats
 # POST /rules   {"address": "...", "hop_depth": 2} -> per-heuristic rule signal

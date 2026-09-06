@@ -112,4 +112,26 @@ GET http://localhost:3000/api/clusters -> returned source: "pipeline"
 - Real Kaggle dataset download pending user credentials; synthetic dataset currently used for local pipeline verification.
 - Phase R8 testing & hardening scheduled next per `BACKEND_BUILD_PLAN.md`.
 
->>>>>>> Stashed changes
+
+---
+
+## 2026-09-06 — Cline (implementation agent) — Phase R8 Testing & Hardening
+
+**What changed:**
+- `backend/scripts/hardening_check.py` [NEW] — R8 hardening check over the real ingested dataset (service in-process, real graph index + real model); writes `artifacts/hardening_report.json`. Covers: known-licit, known-illicit, isolated/low-degree, hub subgraph boundedness, out-of-dataset behavior, R5 correlation invariant. Explicitly NOT a model evaluation — reports no accuracy/recall.
+- `src/components/MethodologyModal.tsx` [MODIFIED] — honesty-layer UI per ROADMAP R6.5 spec: replaced stale pre-correction metrics (89.4%/81.2%/0.851/78.6% from the banned random split) with the honest time-respecting-split numbers (illicit recall 1.7% / precision 50.0% / F1 0.033; accuracy 95.4% secondary-only); §1 split description corrected to time-respecting 70/15/15 with span-0 enforcement (14,270/14,270 PASS); confirmed definition corrected to P(illicit) ≥ 0.5 (LEARNED_FLAG_THRESHOLD); added concept-drift limitation callout and out-of-dataset `classified: false` disclosure.
+- `src/App.tsx` [MODIFIED] — standing footer honesty banner (validated-regime + "confirmed ≠ proof of guilt").
+- `artifacts/model_eval.json` [REGENERATED] — prior on-disk artifact still carried the 0.9366-recall leakage-signature numbers; re-trained with the corrected split (recall 0.017 / precision 0.500 / F1 0.033).
+- `backend/README.md` [MODIFIED] — added hardening_check to the Run section.
+
+**Verified how:**
+```
+$ backend/.venv/Scripts/python -m pytest backend/tests -q      # 59 passed
+$ npx tsc --noEmit                                             # 0 errors
+$ backend/.venv/Scripts/python backend/scripts/hardening_check.py
+  all 6 checks PASS (see artifacts/hardening_report.json)
+```
+
+**Still open / unverified:**
+- Phase R9 submission packaging (README pass, demo script, scope freeze).
+- Mixer-address validation set still a placeholder (`data/mixers.txt` present but unsourced) — `mixer_adjacent` remains silent on real data.

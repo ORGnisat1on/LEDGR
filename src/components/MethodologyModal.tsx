@@ -57,7 +57,7 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
               <div className="p-3 bg-[#16161d] rounded-xl border border-emerald-900/50">
                 <span className="font-bold text-emerald-400 block text-xs mb-1">✅ Our Entity-Safe Split:</span>
                 <p className="text-[11px] text-zinc-400">
-                  Randomly assigns entire entities (80/20). Programmatically verified: <strong>0 shared addresses, 0 shared transactions</strong> between train and test.
+                  <strong>Time-respecting entity split (70/15/15):</strong> entities are ordered by their earliest transaction time-step; the earliest 70% train, the next 15% validate, the final 15% test. Programmatically verified on every run: 0 shared entities/transactions across splits, and every entity's transactions fall in a single time step (span-0 enforced, 14,270/14,270 PASS).
                 </p>
               </div>
             </div>
@@ -79,24 +79,27 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="p-3 bg-[#16161d] rounded-xl border border-zinc-800 text-center">
                 <span className="text-[10px] text-zinc-400 uppercase font-semibold block">Recall (Illicit)</span>
-                <span className="text-xl font-extrabold text-indigo-400 font-mono">89.4%</span>
-                <span className="text-[10px] text-zinc-500 block mt-0.5">Catches real fraud</span>
+                <span className="text-xl font-extrabold text-indigo-400 font-mono">1.7%</span>
+                <span className="text-[10px] text-zinc-500 block mt-0.5">Test-set illicit caught</span>
               </div>
               <div className="p-3 bg-[#16161d] rounded-xl border border-zinc-800 text-center">
                 <span className="text-[10px] text-zinc-400 uppercase font-semibold block">Precision (Illicit)</span>
-                <span className="text-xl font-extrabold text-zinc-200 font-mono">81.2%</span>
-                <span className="text-[10px] text-zinc-500 block mt-0.5">Low false positives</span>
+                <span className="text-xl font-extrabold text-zinc-200 font-mono">50.0%</span>
+                <span className="text-[10px] text-zinc-500 block mt-0.5">Of flags truly illicit</span>
               </div>
               <div className="p-3 bg-[#16161d] rounded-xl border border-zinc-800 text-center">
                 <span className="text-[10px] text-zinc-400 uppercase font-semibold block">F1 Score</span>
-                <span className="text-xl font-extrabold text-zinc-200 font-mono">0.851</span>
+                <span className="text-xl font-extrabold text-zinc-200 font-mono">0.033</span>
                 <span className="text-[10px] text-zinc-500 block mt-0.5">Harmonic balance</span>
               </div>
               <div className="p-3 bg-[#16161d] rounded-xl border border-zinc-800 text-center">
-                <span className="text-[10px] text-zinc-400 uppercase font-semibold block">Confirmed Agreement</span>
-                <span className="text-xl font-extrabold text-emerald-400 font-mono">78.6%</span>
-                <span className="text-[10px] text-zinc-500 block mt-0.5">Dual-signal hits</span>
+                <span className="text-[10px] text-zinc-400 uppercase font-semibold block">Accuracy (secondary)</span>
+                <span className="text-xl font-extrabold text-emerald-400 font-mono">95.4%</span>
+                <span className="text-[10px] text-zinc-500 block mt-0.5">Not meaningful alone</span>
               </div>
+            </div>
+            <div className="p-3 bg-amber-950/30 border border-amber-800/50 rounded-xl text-amber-200 text-[11px]">
+              <strong>Honest limitation (concept drift):</strong> these metrics come from the time-respecting entity-safe split, where the test set sits at the latest time-steps (45–49). Published baselines (e.g. Weber et al. 2019) show illicit patterns shift sharply at time-step 43, so a model trained on earlier steps generalizes poorly to later ones — the low recall above is that effect, reported honestly rather than tuned around. Live-traced wallets operating after the dataset window are <em>outside the model's validated regime</em>.
             </div>
           </div>
 
@@ -108,13 +111,16 @@ export const MethodologyModal: React.FC<MethodologyModalProps> = ({ isOpen, onCl
             </h3>
             <ul className="space-y-1.5 text-xs text-zinc-300 list-disc list-inside">
               <li>
-                <strong>Confirmed:</strong> Rule-based heuristic flags the wallet (Peel Chain, Rapid Fan-Out, or Mixer Adjacency) <em>AND</em> learned ML model classifies it as Illicit with &gt;80% confidence.
+                <strong>Confirmed:</strong> Rule-based heuristic flags the wallet (Peel Chain, Rapid Fan-Out, or Mixer Adjacency) <em>AND</em> learned ML model classifies it as Illicit at P(illicit) ≥ 0.5 (the <code>LEARNED_FLAG_THRESHOLD</code> documented in <code>ledgr/config.py</code>).
               </li>
               <li>
                 <strong>Watch:</strong> Exactly one of the two independent signals fires (either heuristic only, or ML only). Treated as an exploratory investigative lead.
               </li>
               <li>
                 <strong>None:</strong> Neither signal fires. Protects against false freezing of legitimate merchants.
+              </li>
+              <li>
+                <strong>Out-of-dataset wallets:</strong> a wallet not present in the Elliptic feature set is reported as <code>classified: false</code> — no risk score is fabricated for it, and it can never be confirmed (only watch-as-rule or none).
               </li>
             </ul>
 

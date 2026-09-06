@@ -278,7 +278,9 @@ export default function App() {
       <footer className="border-t border-zinc-800/80 bg-[#09090b] py-3 px-4 text-center text-xs text-zinc-500">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 text-zinc-500 font-mono text-[11px]">
           <span className="font-bold text-zinc-400">LEDGR</span>
-          <span>Dual-Signal Correlation & Graph Analytics</span>
+          <span className="text-amber-500/80">
+            Learned signal validated only on the time-respecting entity-safe split (test time-steps 45–49); wallets outside that regime are not validated — &quot;confirmed&quot; means two imperfect signals agree, not proof of guilt.
+          </span>
         </div>
       </footer>
 
