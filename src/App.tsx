@@ -22,10 +22,11 @@ import { Search, ShieldAlert, ArrowRight, RefreshCw, FileText, CheckCircle2, Ale
 export default function App() {
   const [activeCaseId, setActiveCaseId] = useState<string>('case-1');
   const [trace, setTrace] = useState<TraceResult>(CASE_STUDIES[0].trace);
-  // Where the current trace came from. 'mock' data is always labeled in the UI
-  // (R7): the live flow uses the real Python pipeline, and the mock engine is
-  // only an explicitly-offline fallback — never presented as pipeline output.
-  const [dataSource, setDataSource] = useState<'pipeline' | 'mock'>('mock');
+  // Where the current trace came from.
+  // 'pipeline'             — real Python pipeline output
+  // 'mock'                 — pre-set demonstration case (explicitly labeled)
+  // 'pipeline_unavailable' — backend not running; trace state is unchanged (no fabricated data)
+  const [dataSource, setDataSource] = useState<'pipeline' | 'mock' | 'pipeline_unavailable'>('mock');
   const [dataNote, setDataNote] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<WalletNode | null>(null);
   const [hopFilter, setHopFilter] = useState<number>(4);
@@ -62,43 +63,48 @@ export default function App() {
     }
   };
 
-  // Run trace for custom address or complaint — live pipeline first, explicit
-  // mock fallback only when the Python service is unavailable (R7).
+  // Run trace for custom address or complaint — live pipeline only (R7).
+  // If the Python service is unavailable, show an honest error; do NOT fall
+  // through to mock/fabricated data.
   const handleTraceAddress = async (address: string, customComplaint?: Complaint) => {
     setIsTracing(true);
     try {
       const outcome = await runPipelineTrace(address, hopFilter, customComplaint);
-      const result = outcome.trace;
+      setActiveCaseId('custom');
+
       if (outcome.source === 'pipeline') {
         setTrace(outcome.trace);
         setDataSource('pipeline');
         setDataNote(null);
-      } else {
-        setTrace(outcome.trace);
-        setDataSource('mock');
-        setDataNote(outcome.note || 'Python pipeline unavailable — showing labeled offline mock data.');
-      }
-      setActiveCaseId('custom');
 
-      // Auto add confirmed/watch wallets to watchlist if not present
-      if (result.verdict !== 'none') {
-        const exists = watchlist.some(w => w.address.toLowerCase() === address.toLowerCase());
-        if (!exists) {
-          const newItem: WatchlistItem = {
-            address: result.targetAddress,
-            label: result.complaint?.victimName ? `${result.complaint.victimName} Suspect` : 'Reported Suspect Wallet',
-            ackNumber: result.complaint?.ackNumber || `NCRP-2026-IN-${Math.floor(10000 + Math.random() * 90000)}`,
-            victimName: result.complaint?.victimName || 'Citizen Complainant',
-            dateAdded: new Date().toISOString().substring(0, 10),
-            verdict: result.verdict,
-            category: result.complaint?.scamCategory || 'Cyber Financial Fraud',
-            amountInr: result.complaint?.amountInr || 1500000
-          };
-          setWatchlist(prev => [newItem, ...prev]);
+        // Auto-add confirmed/watch wallets to watchlist
+        const result = outcome.trace;
+        if (result.verdict !== 'none') {
+          const exists = watchlist.some(w => w.address.toLowerCase() === address.toLowerCase());
+          if (!exists) {
+            const newItem: WatchlistItem = {
+              address: result.targetAddress,
+              label: result.complaint?.victimName ? `${result.complaint.victimName} Suspect` : 'Reported Suspect Wallet',
+              ackNumber: result.complaint?.ackNumber || `NCRP-2026-IN-${Math.floor(10000 + Math.random() * 90000)}`,
+              victimName: result.complaint?.victimName || 'Citizen Complainant',
+              dateAdded: new Date().toISOString().substring(0, 10),
+              verdict: result.verdict,
+              category: result.complaint?.scamCategory || 'Cyber Financial Fraud',
+              amountInr: result.complaint?.amountInr || 1500000
+            };
+            setWatchlist(prev => [newItem, ...prev]);
+          }
         }
+      } else {
+        // outcome.source === 'fallback': no trace data — leave current trace
+        // state unchanged and surface an honest error. Never fabricate.
+        setDataSource('pipeline_unavailable');
+        setDataNote(outcome.note);
       }
     } catch (err) {
-      console.error("Tracing error:", err);
+      console.error('Tracing error:', err);
+      setDataSource('pipeline_unavailable');
+      setDataNote('Unexpected error contacting the pipeline — check the browser console.');
     } finally {
       setIsTracing(false);
     }
@@ -182,23 +188,29 @@ export default function App() {
           </form>
         </div>
 
-        {/* Data source banner: pipeline vs explicitly-labeled mock (R7) */}
+        {/* Data source banner: pipeline (teal) / mock preset (amber) / pipeline unavailable (red) */}
         <div className={`p-3 rounded-2xl border text-xs flex items-start gap-2 ${
           dataSource === 'pipeline'
             ? 'bg-teal-950/30 border-teal-800/60 text-teal-300'
-            : 'bg-amber-950/30 border-amber-800/60 text-amber-300'
+            : dataSource === 'pipeline_unavailable'
+              ? 'bg-rose-950/40 border-rose-700/60 text-rose-300'
+              : 'bg-amber-950/30 border-amber-800/60 text-amber-300'
         }`}>
           <Database className="w-4 h-4 mt-0.5 shrink-0" />
           <div className="space-y-0.5">
             <div className="font-bold uppercase tracking-wider">
               {dataSource === 'pipeline'
                 ? 'Live pipeline output — real subgraph, rules, learned signal and correlation'
-                : 'Offline mock data — not live pipeline output'}
+                : dataSource === 'pipeline_unavailable'
+                  ? '⚠ Pipeline unavailable — no trace data shown (no fabrication)'
+                  : 'Preset demonstration case — mock data, not live pipeline output'}
             </div>
             <p className="opacity-80">
               {dataNote ?? (dataSource === 'pipeline'
                 ? 'Evaluated for the reported wallet; subgraph members are shown structurally (Elliptic carries no BTC amounts, so monetary fields are 0, not fabricated).'
-                : 'Run the backend pipeline and start the Python service to trace real wallets.')}
+                : dataSource === 'pipeline_unavailable'
+                  ? 'Start the Python service: cd backend && uvicorn ledgr.service:app --reload — then re-submit the address.'
+                  : 'Enter a wallet address above and click Analyze to run the real pipeline.')}
             </p>
           </div>
         </div>

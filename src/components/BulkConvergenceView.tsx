@@ -78,7 +78,7 @@ export const BulkConvergenceView: React.FC<BulkConvergenceViewProps> = ({
     fetch('/api/clusters')
       .then((r) => r.json())
       .then((data: ClustersPayload) => { if (!cancelled) setPayload(data); })
-      .catch(() => { if (!cancelled) setPayload({ source: 'fallback', available: false, note: 'Clustering service unreachable — showing labeled offline mock data.' }); })
+      .catch(() => { if (!cancelled) setPayload({ source: 'fallback', available: false, note: 'Clustering service unreachable — no cluster data is shown. Start the backend and retry.' }); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [isOpen]);

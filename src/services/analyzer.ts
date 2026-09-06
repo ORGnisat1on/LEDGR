@@ -27,7 +27,7 @@ export class ForensicEngine {
     // 1. Check if it matches a pre-indexed known forensic case study
     const matchedCase = CASE_STUDIES.find(
       c => c.address.toLowerCase() === cleanAddress.toLowerCase() ||
-           c.trace.nodes.some(n => n.id.toLowerCase() === cleanAddress.toLowerCase())
+        c.trace.nodes.some(n => n.id.toLowerCase() === cleanAddress.toLowerCase())
     );
 
     if (matchedCase) {
@@ -547,11 +547,25 @@ interface PipelineScore { classified: boolean; risk_score: number | null; predic
 interface PipelineVerdict { verdict: string; contributing_signals: any }
 interface PipelineAttribution { name: string; category: string; confidence_tier: string; source_name: string; jurisdiction?: string | null }
 
-export interface TraceOutcome {
-  source: 'pipeline' | 'fallback';
-  note?: string;
+/** Pipeline succeeded — real data attached. */
+export interface TraceOutcomePipeline {
+  source: 'pipeline';
   trace: TraceResult;
 }
+
+/**
+ * Python service unreachable or returned an error envelope.
+ * NO trace is attached — the caller must show an honest "pipeline
+ * unavailable" state and MUST NOT fabricate data to fill the gap.
+ */
+export interface TraceOutcomeFallback {
+  source: 'fallback';
+  note: string;
+  // Deliberately no `trace` field — callers that branch on source will get a
+  // type error if they try to access one, making silent mock-use impossible.
+}
+
+export type TraceOutcome = TraceOutcomePipeline | TraceOutcomeFallback;
 
 const LABEL_TEXT: Record<number, string> = {
   1: 'Illicit-labeled transaction (Elliptic)',
@@ -561,27 +575,37 @@ const LABEL_TEXT: Record<number, string> = {
 
 /**
  * Run the reported wallet through the real pipeline via the Node proxy
- * (`POST /api/trace`). Returns `source: 'fallback'` (with an explanatory note)
- * when the Python service is unavailable — the caller must label that case in
- * the UI and may then use the mock engine as an explicitly-offline fallback.
+ * (`POST /api/trace`). Returns `source: 'fallback'` (with an explanatory
+ * note and NO trace) when the Python service is unavailable. The caller
+ * is responsible for surfacing an honest "pipeline unavailable" UI state —
+ * this function never fabricates trace data to fill the gap.
+ *
+ * Principle: LEDGR's identity is "never fabricate results". The fallback
+ * branch must not silently produce plausible-looking mock output.
  */
 export async function runPipelineTrace(
   address: string,
   hopDepth: number,
-  customComplaint?: Complaint
+  customComplaint?: Complaint   // passed through to liveTrace.complaint in the pipeline-success path
 ): Promise<TraceOutcome> {
   const response = await fetch('/api/trace', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ address: address.trim(), hopDepth }),
+    body: JSON.stringify({
+      address: address.trim(),
+      hop_depth: hopDepth
+    })
   });
   const payload = await response.json();
 
+  // Any non-pipeline envelope (timeout, service down, 5xx) → honest error.
+  // DO NOT call ForensicEngine here — returning fabricated data as if it were
+  // real pipeline output violates the project's core "no fabrication" rule
+  // (AGENTS.md "No placeholders or mocks standing in for real implementation").
   if (payload?.source !== 'pipeline' || !payload?.data) {
     return {
       source: 'fallback',
-      note: payload?.note || 'Python pipeline unavailable — showing labeled offline mock data.',
-      trace: await ForensicEngine.traceAddress(address, hopDepth, customComplaint),
+      note: payload?.note ?? 'Python pipeline service unavailable — no trace data available. Start the backend with: cd backend && uvicorn ledgr.service:app --reload',
     };
   }
 
