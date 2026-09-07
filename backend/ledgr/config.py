@@ -122,6 +122,10 @@ CLUSTER_MEMBER_SAMPLE = 10
 LIVE_MAX_TXS_PER_ADDRESS = 50  # most recent N txs fetched per address (Binance-scale wallets)
 LIVE_MAX_COUNTERPARTY_FETCHES = 25  # max extra address fetches beyond the seed (hop_depth > 1)
 LIVE_MAX_NODES = 500  # hard cap on the ad-hoc live subgraph size
+# Live-trace fetch timeout (seconds): the Node trace proxy (server.ts) aborts its
+# Python fetch after this long (30 s). Mirrored as LIVE_FETCH_TIMEOUT_SECONDS in
+# src/config/constants.ts — keep both in sync if either side changes.
+LIVE_FETCH_TIMEOUT_SECONDS =  30
 # Elliptic time steps are ~2 weeks; live block timestamps are mapped to the same
 # granularity so the R3 time-window heuristics keep their documented semantics.
 LIVE_TIME_STEP_SECONDS = 14 * 24 * 3600

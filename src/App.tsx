@@ -15,7 +15,8 @@ import { MethodologyModal } from './components/MethodologyModal';
 import { InvestigationReportModal } from './components/InvestigationReportModal';
 
 import { CASE_STUDIES, INITIAL_WATCHLIST } from './data/mockCases';
-import { ForensicEngine, runPipelineTrace } from './services/analyzer';
+import { runPipelineTrace } from './services/analyzer';
+import { LIVE_FETCH_TIMEOUT_SECONDS } from './config/constants';
 import { TraceResult, WalletNode, WatchlistItem, Complaint } from './types';
 import { Search, ShieldAlert, ArrowRight, RefreshCw, FileText, CheckCircle2, AlertTriangle, Database } from 'lucide-react';
 
@@ -187,6 +188,17 @@ export default function App() {
             </button>
           </form>
         </div>
+
+        {/* Live-trace in-progress status — real state only, no fabricated progress. */}
+        {isTracing && (
+          <div className="flex items-center gap-2 text-xs text-sky-300 bg-sky-950/30 border border-sky-800/50 rounded-xl px-3 py-2">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+            <span>
+              Tracing live wallet — this can take up to {LIVE_FETCH_TIMEOUT_SECONDS}s. The previous view
+              (if any) remains on screen until the pipeline responds or the request times out.
+            </span>
+          </div>
+        )}
 
         {/* Data source banner: pipeline (teal) / mock preset (amber) / pipeline unavailable (red) */}
         <div className={`p-3 rounded-2xl border text-xs flex items-start gap-2 ${

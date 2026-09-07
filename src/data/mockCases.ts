@@ -1002,17 +1002,7 @@ export const INITIAL_WATCHLIST: WatchlistItem[] = [
     dateAdded: '2026-08-28',
     verdict: 'confirmed',
     category: 'Pig Butchering / Investment',
-    amountInr: 4850000,
-    unconfirmedAlert: {
-      txHash: '0x992384fae89102b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7',
-      direction: 'outgoing',
-      amountBtc: 0.185,
-      amountInr: 165000,
-      detectedAt: 'Just now (12s ago)',
-      status: 'unconfirmed_mempool',
-      feeRateSatVb: 42,
-      counterpartyAddress: '1NewMuleBurnerAddress20260903Xyz99'
-    }
+    amountInr: 4850000
   },
   {
     address: '3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy',

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import { CLUSTERS_FETCH_TIMEOUT_SECONDS, LIVE_FETCH_TIMEOUT_SECONDS, MEMPOOL_FETCH_TIMEOUT_SECONDS } from './src/config/constants';
 
 dotenv.config();
 
@@ -86,7 +87,7 @@ Keep tone professional, strictly objective, and direct.`;
 
     const py = async (path: string, init?: RequestInit) => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const timeoutId = setTimeout(() => controller.abort(), LIVE_FETCH_TIMEOUT_SECONDS * 1000);
       try {
         const r = await fetch(`${pyBase}${path}`, { signal: controller.signal, ...init });
         if (!r.ok) {
@@ -136,7 +137,7 @@ Keep tone professional, strictly objective, and direct.`;
         });
       }
       const note = err?.name === 'AbortError'
-        ? 'Python pipeline timed out after 30 s — no new trace data is shown; the previous view (if any) remains on screen unchanged. Check that the backend is still running and retry.'
+        ? `Python pipeline timed out after ${LIVE_FETCH_TIMEOUT_SECONDS} s — no new trace data is shown; the previous view (if any) remains on screen unchanged. Check that the backend is still running and retry.`
         : 'Python pipeline service unreachable — no new trace data is shown; the previous view (if any) remains on screen unchanged. Start the backend with: cd backend && uvicorn ledgr.service:app --reload';
       return res.json({ source: 'fallback', available: false, note });
     }
@@ -148,7 +149,7 @@ Keep tone professional, strictly objective, and direct.`;
     const pyBase = process.env.LEDGR_SERVICE_URL || 'http://localhost:8000';
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const timeoutId = setTimeout(() => controller.abort(), CLUSTERS_FETCH_TIMEOUT_SECONDS * 1000);
       const response = await fetch(`${pyBase}/clusters`, { signal: controller.signal });
       clearTimeout(timeoutId);
       if (response.ok) {
@@ -175,7 +176,7 @@ Keep tone professional, strictly objective, and direct.`;
     try {
       // Query public mempool.space API with short timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const timeoutId = setTimeout(() => controller.abort(), MEMPOOL_FETCH_TIMEOUT_SECONDS * 1000);
       
       const response = await fetch(`https://mempool.space/api/address/${address}/txs/mempool`, {
         signal: controller.signal,

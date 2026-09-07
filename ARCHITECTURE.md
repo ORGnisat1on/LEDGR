@@ -48,17 +48,19 @@ Victim-reported wallet address (input)
 
 ---
 
-## Module 1b — Watchlist Monitoring (stretch goal)
+## Module 1b — Watchlist Monitoring (IMPLEMENTED 2026-09-07)
 
 **Purpose:** give investigators an early warning when a wallet already flagged by this system shows new activity — specifically, before that activity confirms on-chain.
 
-**Inputs:** verdict records from Module 4 (`confirmed` or `watch` wallets are added to a persistent watchlist); a live mempool feed (e.g. mempool.space's free API/websocket) for unconfirmed-transaction data.
+**Inputs:** verdict records from Module 4 (`confirmed` or `watch` wallets are added to a persistent watchlist); mempool.space free API via `/api/mempool/address/:address` proxy endpoint for unconfirmed-transaction data.
 
-**Logic:** poll or subscribe to the mempool feed, filtered to addresses currently on the watchlist. When a watchlisted address appears as sender or receiver in a new unconfirmed transaction, emit an alert. This is a lookup against a known list, not a re-run of the rule-based or learned signal — no new inference happens here.
+**Logic:** polls mempool.space at 30-second intervals per watchlisted address (respecting public API rate limits). For each address, fetches unconfirmed transactions from `/api/address/{address}/txs/mempool`, filters to transactions involving the watched address, derives direction (incoming/outgoing) by comparing watched address against vin/vout, calculates amount from satoshi values, determines counterparty from the opposite side of the transaction, computes fee rate (sat/vB) from fee/weight. No new inference — pure lookup against known list.
 
-**Outputs:** a push-style alert (`{wallet, prior_verdict, tx_hash, direction, seen_at: unconfirmed}`), surfaced to the investigator ahead of — and separately from — the standard on-demand investigation report in Module 6.
+**Outputs:** per-address alert state (`{wallet, prior_verdict, tx_hash, direction, amount_btc, amount_inr, detected_at, fee_rate_sat_vb, counterparty_address, status: unconfirmed_mempool}`) with three distinct UI states: "monitoring, no activity" (normal), "error fetching" (network/rate-limit), "alert detected" (live unconfirmed tx). Relative timestamps update live while modal is open.
 
 **Explicit boundary:** this module only watches addresses already on the watchlist (i.e., previously run through Modules 2–4 at least once). It does not ingest the full mempool or the full chain, and it does not predict that a wallet is *about to* transact before any transaction exists — it detects a broadcast transaction before confirmation, which is a materially different and much smaller claim. See `SCOPE.md` for why true predictive forecasting is logged separately as future work, not part of this module.
+
+**Rate limiting:** 30s interval per address. With N=4 watchlist addresses: 4 req/30s = 8 req/min = 480 req/hr. Well within mempool.space free tier limits (thousands/day). For demo with judges, this is safe.
 
 ---
 
