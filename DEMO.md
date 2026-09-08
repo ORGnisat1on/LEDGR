@@ -60,7 +60,9 @@
 ### 5. Live Lookup — Real BTC Address (Binance Cold Wallet) (60 sec)
 **Address:** `34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo` (from `data/exchanges.txt`, BitInfoCharts sourced)
 
-**Enable** `LEDGR_LIVE_TRACING=1` (or confirm it's on). **Click Trace.** Observe:
+**Enable** `LEDGR_LIVE_TRACING=1` (or confirm it's on).
+
+**Important — set Hop Depth to 1 before Tracing:** Click `1H` on the **Depth** selector in the fund-flow graph toolbar (top of the graph card). This address's default hop depth of 2 was measured at **55–60 s+** — the frontier fans out to 6,755 counterparty addresses at hop 1 alone, well past the **30 s** proxy timeout (`LIVE_FETCH_TIMEOUT_SECONDS`). Hop depth **1** completes in **~2.5 s** and still demonstrates the live Blockstream/BlockCypher integration and the watch-verdict cap. **Then click Trace.** Observe:
 - **Source:** `live-lookup` (real Blockstream/BlockCypher calls)
 - **Trace graph:** real on-chain counterparties
 - **Rules panel:** runs on live graph (peel-chain/fan-out if structure matches)
@@ -125,7 +127,7 @@
 - [ ] Frontend running: `npm run dev` (port 3000, proxies `/api/*` to backend)
 - [ ] Methodology modal renders (click "Benchmark Methodology" in header)
 - [ ] In-dataset addresses work: `298938351` → CONFIRMED, `232438397` → WATCH (rule only), `232629023` → WATCH (learned only)
-- [ ] Live lookup works: `34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo` → live-lookup, clusters button works, attribution shows
+- [ ] Live lookup works: `34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo` → **set Hop Depth to `1` first** (click `1H` on the Depth selector; the default hop depth 2 exceeds the 30 s timeout on this address — measured 55–60 s+ vs ~2.5 s at 1H), then live-lookup, clusters button works, attribution shows
 - [ ] Invalid address: `1InvalidAddressThatDoesNotExist123` → not-found-on-chain (200, not 503)
 - [ ] Footer honesty banner visible: "Validated regime: Elliptic time-steps 1–49 (through ~2018) | Confirmed = two imperfect signals agree, not proof of guilt"
 

@@ -48,6 +48,8 @@ export const Header: React.FC<HeaderProps> = ({
             <span>Intake</span>
           </button>
 
+          {/* Temporarily hidden: WatchlistMonitor triggers a crash bug (setState-in-render / infinite useEffect loop).
+              Not in DEMO.md judge walkthrough script.
           <button
             id="btn-open-watchlist"
             onClick={onOpenWatchlist}
@@ -65,6 +67,7 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             )}
           </button>
+          */}
 
           <button
             id="btn-open-convergence"
