@@ -67,7 +67,7 @@ See [`METHODOLOGY.md`](./METHODOLOGY.md) §1–§2 and [`DATA.md`](./DATA.md) fo
 
 - Python 3.11+
 - Node.js 18+
-- (Optional) Kaggle credentials for the real Elliptic/Elliptic++ dataset — the pipeline runs on synthetic fixtures without them
+- The Elliptic dataset CSVs must be manually placed in `data/raw/` (download from Kaggle: [`ellipticco/elliptic-data-set`](https://www.kaggle.com/datasets/ellipticco/elliptic-data-set)). There is no automatic download or synthetic-fixture fallback in the production pipeline — if the CSVs are missing, `ingest.py` raises FileNotFoundError. Separate, much smaller synthetic fixtures exist only under `backend/tests/fixtures/synthetic/` and are used exclusively by the test suite.
 
 ### Backend (Python/FastAPI)
 
