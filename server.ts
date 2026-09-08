@@ -78,11 +78,14 @@ Keep tone professional, strictly objective, and direct.`;
   // response is an explicit fallback — the client decides what to show and
   // never presents mock data as pipeline output.
   app.post('/api/trace', async (req, res) => {
-    const { address, hopDepth } = req.body || {};
+    const { address, hop_depth } = req.body || {};
     if (!address || typeof address !== 'string') {
       return res.status(400).json({ error: 'address is required' });
     }
-    const hop = Number.isFinite(hopDepth) ? Math.max(1, Math.min(10, Number(hopDepth))) : 2;
+    if (hop_depth === undefined) {
+      console.warn(`[WARN] hop_depth was undefined in request to /api/trace, falling back to default 2`);
+    }
+    const hop = Number.isFinite(hop_depth) ? Math.max(1, Math.min(10, Number(hop_depth))) : 2;
     const pyBase = process.env.LEDGR_SERVICE_URL || 'http://localhost:8000';
 
     const py = async (path: string, init?: RequestInit) => {
@@ -110,9 +113,16 @@ Keep tone professional, strictly objective, and direct.`;
         py('/clusters').catch(() => null),
       ]);
 
-      const seedCluster = clusters?.clusters?.find((c: any) =>
+      let seedCluster = clusters?.clusters?.find((c: any) =>
         (c.members_sample || []).includes(address)
       );
+
+      if (!seedCluster && trace?.source === 'live-lookup') {
+        const liveClusters = await py(`/clusters/live?address=${address}`).catch(() => null);
+        seedCluster = liveClusters?.clusters?.find((c: any) =>
+          (c.members_sample || []).includes(address)
+        );
+      }
       return res.json({
         source: 'pipeline',
         available: true,

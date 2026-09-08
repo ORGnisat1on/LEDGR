@@ -5,7 +5,7 @@
 export type RiskVerdict = 'confirmed' | 'watch' | 'none';
 export type RuleFlag = 'high' | 'low' | 'none';
 export type MlPrediction = 'illicit' | 'licit' | 'unknown';
-export type ConfidenceTier = 'elliptic-derived' | 'supplementary-source';
+export type ConfidenceTier = 'elliptic-derived' | 'supplementary-source' | 'unattributed';
 
 export interface Complaint {
   id: string;

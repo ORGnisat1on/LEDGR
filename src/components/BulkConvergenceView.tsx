@@ -45,6 +45,11 @@ const TIER_STYLES: Record<ConfidenceTier, { label: string; badge: string; dot: s
     badge: 'text-amber-300 bg-amber-950/50 border-amber-700/50',
     dot: 'bg-amber-400',
   },
+  'unattributed': {
+    label: 'unattributed',
+    badge: 'text-zinc-400 bg-zinc-950/50 border-zinc-700/50',
+    dot: 'bg-zinc-500',
+  },
 };
 
 const TierBadge: React.FC<{ tier: ConfidenceTier }> = ({ tier }) => {

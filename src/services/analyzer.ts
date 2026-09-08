@@ -143,8 +143,8 @@ export async function runPipelineTrace(
   const liveAttribution = {
     name: attribution?.name ?? 'Unattributed (no sourced exchange match)',
     category: (attribution?.category as any) ?? 'Unknown',
-    confidenceTier: (attribution?.confidence_tier as ConfidenceTier) ?? 'elliptic-derived',
-    sourceCitation: attribution?.source_name ?? 'Elliptic-derived entity clustering (no supplementary source matched)',
+    confidenceTier: (attribution?.confidence_tier as ConfidenceTier) ?? 'unattributed',
+    sourceCitation: attribution?.source_name ?? 'Unattributed (no supplementary source matched)',
     depositAddress: address.trim(),
     riskLevel: (verdict.verdict === 'confirmed' ? 'CRITICAL' : verdict.verdict === 'watch' ? 'ELEVATED' : 'LOW') as 'CRITICAL' | 'ELEVATED' | 'LOW',
     jurisdiction: attribution?.jurisdiction ?? 'Unknown',
