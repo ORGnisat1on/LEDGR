@@ -20,8 +20,8 @@ export const NodeInspector: React.FC<NodeInspectorProps> = ({ node, edges, onClo
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const incomingTxs = [...edges.filter(e => e.to === node.id)].sort((a, b) => b.amountBtc - a.amountBtc);
-  const outgoingTxs = [...edges.filter(e => e.from === node.id)].sort((a, b) => b.amountBtc - a.amountBtc);
+  const incomingTxs = edges.filter(e => e.to === node.id);
+  const outgoingTxs = edges.filter(e => e.from === node.id);
 
   const isConfirmed = node.verdict === 'confirmed';
   const isWatch = node.verdict === 'watch';

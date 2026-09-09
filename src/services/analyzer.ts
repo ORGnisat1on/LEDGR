@@ -6,7 +6,7 @@
  * an explicit `fallback` envelope (see `runPipelineTrace`** with NO trace.
  */
 
-import { TraceResult, TraceSource, WalletNode, TransactionEdge, RiskVerdict, RuleFlag, MlPrediction, ConfidenceTier, Complaint } from '../types';
+import { TraceResult, WalletNode, TransactionEdge, RiskVerdict, RuleFlag, MlPrediction, ConfidenceTier, Complaint } from '../types';
 
 // ---------------------------------------------------------------------------
 // Phase R7 — live pipeline trace (real Python pipeline, not the mock engine)
@@ -14,7 +14,7 @@ import { TraceResult, TraceSource, WalletNode, TransactionEdge, RiskVerdict, Rul
 
 /** Raw shapes returned by the FastAPI pipeline (subset the UI consumes). */
 interface PipelineTraceNode { id: string; hop: number; label: number; time_step: number }
-interface PipelineTrace { source?: string; capped?: boolean; nodes: PipelineTraceNode[]; edges: { src: string; dst: string }[]; stats: Record<string, number> }
+interface PipelineTrace { nodes: PipelineTraceNode[]; edges: { src: string; dst: string }[]; stats: Record<string, number> }
 interface PipelineRules { rule_score: number; rule_flag: string; rules_fired: string[]; contributing_signals: Record<string, { fired: boolean; evidence: any }> }
 interface PipelineScore { classified: boolean; risk_score: number | null; prediction: string | null; flag_threshold?: number }
 interface PipelineVerdict { verdict: string; contributing_signals: any }
@@ -158,14 +158,6 @@ export async function runPipelineTrace(
   const liveTrace: TraceResult = {
     targetAddress: address.trim(),
     complaint: customComplaint,
-    // Trace provenance (`elliptic-indexed` | `live-lookup` | `not-found-on-chain`),
-    // set by the pipeline on the trace object — used by the graph to visually
-    // distinguish live-looked-up wallets from indexed ones.
-    source: trace?.source as TraceSource | undefined,
-    // R9 honesty field: the live path spreads `meta` (incl. `capped`) into the
-    // /trace response. Undefined on indexed/demo traces — no truncation concept
-    // exists there, so no value is invented.
-    fetchCapped: trace?.capped === true,
     nodes,
     edges,
     verdict: (verdict.verdict as RiskVerdict) ?? 'none',

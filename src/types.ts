@@ -6,13 +6,6 @@ export type RiskVerdict = 'confirmed' | 'watch' | 'none';
 export type RuleFlag = 'high' | 'low' | 'none';
 export type MlPrediction = 'illicit' | 'licit' | 'unknown';
 export type ConfidenceTier = 'elliptic-derived' | 'supplementary-source' | 'unattributed';
-/**
- * Where a trace came from — set by the Python pipeline on the trace object
- * (`backend/ledgr/service.py`). `elliptic-indexed` = dataset fast path;
- * `live-lookup` = bounded real-chain fetch (lower confidence, ML unavailable);
- * `not-found-on-chain` = honest empty result. Demo/mock traces carry no source.
- */
-export type TraceSource = 'elliptic-indexed' | 'live-lookup' | 'not-found-on-chain';
 
 export interface Complaint {
   id: string;
@@ -90,17 +83,6 @@ export interface FeatureHighlight {
 export interface TraceResult {
   targetAddress: string;
   complaint?: Complaint;
-  /** Trace provenance from the pipeline (absent on demo/mock traces). */
-  source?: TraceSource;
-  /**
-   * True only when the R9 live-lookup path hit its bounded fetch caps
-   * (backend `meta.capped`: LIVE_MAX_COUNTERPARTY_FETCHES / LIVE_MAX_TXS_PER_ADDRESS
-   * reached). Absent on `elliptic-indexed` traces (bounded by hop depth only —
-   * nothing is truncated there) and on demo/mock traces. Never fabricated.
-   * Note: the live graph's separate LIVE_MAX_NODES hard cap is logged
-   * server-side only and is not currently present in the trace response.
-   */
-  fetchCapped?: boolean;
   nodes: WalletNode[];
   edges: TransactionEdge[];
   verdict: RiskVerdict;

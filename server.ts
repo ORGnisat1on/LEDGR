@@ -105,8 +105,8 @@ Keep tone professional, strictly objective, and direct.`;
     };
 
     try {
-      const trace = await py('/trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) });
-      const [rules, score, verdict, clusters] = await Promise.all([
+      const [trace, rules, score, verdict, clusters] = await Promise.all([
+        py('/trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) }),
         py('/rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) }),
         py('/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address }) }).catch(() => null),
         py('/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) }),
