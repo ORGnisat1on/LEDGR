@@ -25,6 +25,7 @@ can exist here.
 
 from __future__ import annotations
 
+import functools
 import logging
 
 import networkx as nx
@@ -169,6 +170,7 @@ def live_subgraph_payload(G: nx.DiGraph, seed: str, meta: dict) -> dict:
     return {"nodes": nodes, "edges": edges, "stats": stats, "source": SOURCE_LIVE, **meta}
 
 
+@functools.lru_cache(maxsize=32)
 def _default_fetcher(address: str) -> list[dict]:
     """Fetch tx summaries for one address: Blockstream primary, BlockCypher fallback.
 
