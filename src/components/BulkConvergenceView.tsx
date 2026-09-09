@@ -80,7 +80,8 @@ export const BulkConvergenceView: React.FC<BulkConvergenceViewProps> = ({
     if (!isOpen) return;
     let cancelled = false;
     setLoading(true);
-    fetch('/api/clusters')
+    const API_URL = import.meta.env.VITE_API_URL || "";
+    fetch(`${API_URL}/api/clusters`)
       .then((r) => r.json())
       .then((data: ClustersPayload) => { if (!cancelled) setPayload(data); })
       .catch(() => { if (!cancelled) setPayload({ source: 'fallback', available: false, note: 'Clustering service unreachable — no cluster data is shown. Start the backend and retry.' }); })

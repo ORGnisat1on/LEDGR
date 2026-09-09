@@ -61,7 +61,8 @@ export async function runPipelineTrace(
   hopDepth: number,
   customComplaint?: Complaint   // passed through to liveTrace.complaint in the pipeline-success path
 ): Promise<TraceOutcome> {
-  const response = await fetch('/api/trace', {
+  const API_URL = import.meta.env.VITE_API_URL || "";
+  const response = await fetch(`${API_URL}/api/trace`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

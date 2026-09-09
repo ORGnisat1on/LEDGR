@@ -119,7 +119,8 @@ export function useMempoolPolling({
     setError(null);
 
     try {
-      const response = await fetch(`/api/mempool/address/${encodeURIComponent(address)}`, {
+      const API_URL = import.meta.env.VITE_API_URL || "";
+      const response = await fetch(`${API_URL}/api/mempool/address/${encodeURIComponent(address)}`, {
         signal: abortControllerRef.current.signal,
         headers: { 'Accept': 'application/json' },
       });

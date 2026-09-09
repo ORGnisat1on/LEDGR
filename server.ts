@@ -11,13 +11,11 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
 
-  app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '10mb' }));
 
-  // Health check
+// Health check
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', service: 'crypto-fraud-attribution-sih26183', timestamp: new Date().toISOString() });
   });
@@ -86,7 +84,7 @@ Keep tone professional, strictly objective, and direct.`;
       console.warn(`[WARN] hop_depth was undefined in request to /api/trace, falling back to default 2`);
     }
     const hop = Number.isFinite(hop_depth) ? Math.max(1, Math.min(10, Number(hop_depth))) : 2;
-    const pyBase = process.env.LEDGR_SERVICE_URL || 'http://localhost:8000';
+    const pyBase = process.env.PYTHON_API_URL || 'http://localhost:8000';
 
     const py = async (path: string, init?: RequestInit) => {
       const controller = new AbortController();
@@ -156,7 +154,7 @@ Keep tone professional, strictly objective, and direct.`;
   // Phase R6: real cluster/attribution output from the Python pipeline (R6).
   // Falls back explicitly (never silently) when the Python service is down.
   app.get('/api/clusters', async (_req, res) => {
-    const pyBase = process.env.LEDGR_SERVICE_URL || 'http://localhost:8000';
+    const pyBase = process.env.PYTHON_API_URL || 'http://localhost:8000';
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), CLUSTERS_FETCH_TIMEOUT_SECONDS * 1000);
@@ -204,7 +202,9 @@ Keep tone professional, strictly objective, and direct.`;
     }
   });
 
-  // Vite middleware in dev or static files in production
+// Vite middleware in dev or static files in production
+async function startLocalServer() {
+  const PORT = 3000;
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -224,4 +224,8 @@ Keep tone professional, strictly objective, and direct.`;
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startLocalServer();
+}
+
+export default app;
