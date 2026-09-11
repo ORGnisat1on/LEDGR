@@ -1,0 +1,14 @@
+pandas>=2.2
+numpy>=1.26
+networkx>=3.2
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pytest>=8.0
+httpx>=0.27
+# learn.py imports both; omission was a ghost-dependency violation (AGENTS.md)
+scikit-learn>=1.4
+joblib>=1.3
+# blockstream_client.py / blockcypher_client.py import it — live BTC tracing is an
+# MVP feature (SCOPE.md) and must fail loudly if this is missing, not degrade.
+requests>=2.31
+pydantic>=2.0

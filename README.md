@@ -94,6 +94,14 @@ npm run build  # production build
 npm run lint   # tsc --noEmit (0 errors)
 ```
 
+> Local API wiring: `npm run dev` runs `server.ts` (Express) which embeds Vite in
+> middleware mode and serves both the UI and `/api/*` (trace/clusters/brief/mempool)
+> on port 3000, aggregating them by proxying to the Python backend
+> (`PYTHON_API_URL`, default `http://localhost:8000`). Keep `VITE_API_URL` **empty**
+> (`""`) in `.env` so the browser calls same-origin `/api/*` — pointing it at
+> `http://localhost:8000` would bypass Express and hit Python's bare `/trace`,
+> `/rules`, … routes with the `/api` prefix, which 404.
+
 ### Live tracing (demo only)
 
 Set `LEDGR_LIVE_TRACING=1` to enable the live-lookup path (Blockstream primary, BlockCypher fallback). Without it, live endpoints return 503 and traces fall back to the indexed Elliptic graph only.
