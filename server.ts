@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
@@ -12,6 +13,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+let demoCache: any = {};
+try {
+  const cachePath = path.join(__dirname, 'src', 'data', 'demo_cache.json');
+  demoCache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+} catch (e) {
+  console.warn('Could not load demo_cache.json. Demo presets will fallback to live Python backend.', e);
+}
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -84,6 +93,20 @@ Keep tone professional, strictly objective, and direct.`;
       console.warn(`[WARN] hop_depth was undefined in request to /api/trace, falling back to default 2`);
     }
     const hop = Number.isFinite(hop_depth) ? Math.max(1, Math.min(10, Number(hop_depth))) : 2;
+
+    const normAddress = address.trim();
+    // Cache hit for demo presets (case-insensitive key match)
+    const cachedKey = Object.keys(demoCache).find(k => k.toLowerCase() === normAddress.toLowerCase());
+    if (cachedKey) {
+      console.log(`[CACHE HIT] Serving precomputed data for preset: ${cachedKey}`);
+      const cached = demoCache[cachedKey];
+      return res.json({
+        source: 'pipeline',
+        available: true,
+        data: { address: normAddress, hopDepth: hop, trace: cached.trace, rules: cached.rules, score: cached.score, verdict: cached.verdict, attribution: cached.attribution },
+      });
+    }
+
     const pyBase = process.env.PYTHON_API_URL || 'http://localhost:8000';
 
     const py = async (path: string, init?: RequestInit) => {
@@ -103,28 +126,45 @@ Keep tone professional, strictly objective, and direct.`;
     };
 
     try {
-      const [trace, rules, score, verdict, clusters] = await Promise.all([
-        py('/trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) }),
-        py('/rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) }),
-        py('/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address }) }).catch(() => null),
-        py('/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, hop_depth: hop }) }),
-        py('/clusters').catch(() => null),
+      const fetchPromise = Promise.all([
+        py('/trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: normAddress, hop_depth: hop }) }),
+        py('/rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: normAddress, hop_depth: hop }) }),
+        py('/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: normAddress }) }).catch((e) => { if (e.name === 'AbortError') throw e; return null; }),
+        py('/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: normAddress, hop_depth: hop }) }),
+        py('/clusters').catch((e) => { if (e.name === 'AbortError') throw e; return null; }),
       ]);
 
+      let globalTimeoutId: NodeJS.Timeout;
+      const globalTimeout = new Promise((_, reject) => {
+        globalTimeoutId = setTimeout(() => {
+          const e = new Error('Global request timeout');
+          e.name = 'AbortError';
+          reject(e);
+        }, 55000);
+      });
+
+      const [trace, rules, score, verdict, clusters] = await Promise.race([fetchPromise, globalTimeout]) as any;
+
       let seedCluster = clusters?.clusters?.find((c: any) =>
-        (c.members_sample || []).includes(address)
+        (c.members_sample || []).includes(normAddress)
       );
 
       if (!seedCluster && trace?.source === 'live-lookup') {
-        const liveClusters = await py(`/clusters/live?address=${address}`).catch(() => null);
+        const liveClusters = await Promise.race([
+          py(`/clusters/live?address=${normAddress}`).catch((e) => { if (e.name === 'AbortError') throw e; return null; }),
+          globalTimeout
+        ]) as any;
         seedCluster = liveClusters?.clusters?.find((c: any) =>
-          (c.members_sample || []).includes(address)
+          (c.members_sample || []).includes(normAddress)
         );
       }
+      
+      clearTimeout(globalTimeoutId!);
+      
       return res.json({
         source: 'pipeline',
         available: true,
-        data: { address, hopDepth: hop, trace, rules, score, verdict, attribution: seedCluster?.attribution ?? null },
+        data: { address: normAddress, hopDepth: hop, trace, rules, score, verdict, attribution: seedCluster?.attribution ?? null },
       });
     } catch (err: any) {
       // A 404 from the pipeline means the wallet is simply not in the ingested
@@ -136,11 +176,11 @@ Keep tone professional, strictly objective, and direct.`;
           source: 'pipeline',
           available: true,
           data: {
-            address,
+            address: normAddress,
             hopDepth: hop,
             found: false,
             note: 'Wallet not present in the ingested Elliptic dataset — no trace, rule signal, or verdict exists for it, and the learned signal reports it as classified:false (no risk is fabricated).',
-            score: { wallet: address, classified: false, risk_score: null, prediction: null, learned_flag: false },
+            score: { wallet: normAddress, classified: false, risk_score: null, prediction: null, learned_flag: false },
           },
         });
       }
