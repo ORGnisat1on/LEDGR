@@ -20,3 +20,7 @@ venv/
 
 .vercel
 !src/data/demo_cache.json
+scratch/
+.playwright-mcp/
+fetch_presets.cjs
+test_presets.cjs
