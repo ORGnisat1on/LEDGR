@@ -26,3 +26,4 @@ fetch_presets.cjs
 test_presets.cjs
 !artifacts/graph_index.pkl
 !artifacts/learned_model.joblib
+!artifacts/feature_lookup.pkl
