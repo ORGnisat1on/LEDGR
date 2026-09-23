@@ -27,3 +27,11 @@ test_presets.cjs
 !artifacts/graph_index.pkl
 !artifacts/learned_model.joblib
 !artifacts/feature_lookup.pkl
+my_curl_output*.txt
+server_log.txt
+scratch_*.py
+test_server.js
+my_curl_output*.txt
+server_log.txt
+scratch_*.py
+test_server.js
