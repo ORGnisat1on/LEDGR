@@ -165,3 +165,61 @@ def test_verdict_404_unknown_address(monkeypatch):
     client = make_client()
     r = client.post("/verdict", json={"address": "wallet-not-in-graph", "hop_depth": 2})
     assert r.status_code == 404
+
+
+def test_clusters_live_rejects_a_malformed_address_locally(monkeypatch):
+    """Malformed input is answered locally (400) WITHOUT touching a block
+    explorer — it must not be able to consume rate-limit budget or be reported
+    as a live-service failure."""
+    import ledgr.service as svc
+
+    monkeypatch.setenv("LEDGR_LIVE_TRACING", "1")
+    client = make_client()
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("no block-explorer call may be made for malformed input")
+
+    monkeypatch.setattr("ledgr.blockstream_client.BlockstreamClient.get_address_txs", explode)
+    monkeypatch.setattr("ledgr.blockcypher_client.BlockCypherClient.get_address_full", explode)
+    assert svc is not None
+
+    r = client.get("/clusters/live?address=1InvalidAddressThatDoesNotExist123")
+    assert r.status_code == 400
+    body = r.json()["detail"]
+    assert "not a valid mainnet bitcoin address" in body["message"].lower()
+    assert body["kind"] == "invalid-address-format"
+    assert body["retryable"] is False
+
+
+def test_clusters_live_rate_limit_is_a_structured_503(monkeypatch):
+    """An explorer rate limit is a retryable 503 — never a 400 'invalid address'.
+
+    The seam here is `BlockstreamClient` (this endpoint calls it directly rather
+    than through trace_live), so the test must patch THAT to stay offline: the
+    address below is a real mainnet address that is not in the synthetic dataset,
+    and without the patch this test would hit the live block explorer.
+    """
+    import requests
+
+    import ledgr.service as svc
+
+    monkeypatch.setenv("LEDGR_LIVE_TRACING", "1")
+    client = make_client()
+
+    def throttled(*_args, **_kwargs):
+        resp = requests.Response()
+        resp.status_code = 429
+        resp.url = "https://example.invalid/x"
+        err = requests.HTTPError("429 Client Error")
+        err.response = resp
+        raise err
+
+    monkeypatch.setattr("ledgr.service.BlockstreamClient.iter_address_internal_txs", throttled)
+    r = client.get("/clusters/live", params={"address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"})
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    assert detail["kind"] == "rate-limited"
+    assert detail["retryable"] is True
+    # And it must not claim anything about the address.
+    assert "not a valid" not in detail["message"].lower()
+    assert "not a valid" not in svc._RETRYABLE_KIND_MESSAGES["rate-limited"].lower()

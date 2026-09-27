@@ -26,9 +26,26 @@ export default function App() {
   // Where the current trace came from.
   // 'pipeline'             — real Python pipeline output
   // 'mock'                 — pre-set demonstration case (explicitly labeled)
-  // 'pipeline_unavailable' — backend not running; trace state is unchanged (no fabricated data)
-  const [dataSource, setDataSource] = useState<'pipeline' | 'mock' | 'pipeline_unavailable'>('mock');
+  // 'pipeline_empty'       — the pipeline answered: nothing exists to trace for
+  //                          that address (honest answer, NOT a service failure)
+  // 'pipeline_incomplete'  — the pipeline answered with a subgraph but not a
+  //                          complete signal set; nothing shown rather than a
+  //                          partial result with fabricated signal values
+  // 'pipeline_retryable'   — the pipeline is up but the public block explorers
+  //                          are rate-limiting / timing out / down (transient;
+  //                          nothing concluded about the address — RETRY)
+  // 'pipeline_invalid_input' — the pipeline rejected the request as invalid
+  //                          (client problem, not a service failure)
+  // 'pipeline_unavailable' — backend not reachable/errored; trace state is unchanged (no fabricated data)
+  const [dataSource, setDataSource] = useState<
+    'pipeline' | 'mock' | 'pipeline_empty' | 'pipeline_incomplete' | 'pipeline_retryable' | 'pipeline_invalid_input' | 'pipeline_unavailable'
+  >('mock');
   const [dataNote, setDataNote] = useState<string | null>(null);
+  // Machine-readable cause of a transient pipeline failure, used only for the
+  // retryable banner: 'rate-limited' | 'timeout' | 'api-error' | 'service-error'
+  // | 'unknown'. Kept separate from dataNote so the UI can distinguish a rate
+  // limit from a timeout without string-matching the human-readable text.
+  const [failureKind, setFailureKind] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<WalletNode | null>(null);
   const [hopFilter, setHopFilter] = useState<number>(4);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -77,6 +94,7 @@ export default function App() {
         setTrace(outcome.trace);
         setDataSource('pipeline');
         setDataNote(null);
+        setFailureKind(null);
 
         // Auto-add confirmed/watch wallets to watchlist
         const result = outcome.trace;
@@ -96,15 +114,38 @@ export default function App() {
             setWatchlist(prev => [newItem, ...prev]);
           }
         }
+      } else if (outcome.source === 'empty' || outcome.source === 'incomplete') {
+        // The pipeline answered, but with nothing that can be drawn: either an
+        // honest "no such wallet / no on-chain history / not a valid address"
+        // answer ('empty'), or a subgraph without a complete signal set
+        // ('incomplete'). Neither is a service failure, so neither may be shown
+        // as "pipeline unavailable", and no trace is fabricated to fill the gap —
+        // the note explains which case it is while the previous view stays on screen.
+        setDataSource(outcome.source === 'empty' ? 'pipeline_empty' : 'pipeline_incomplete');
+        setDataNote(`${outcome.note} No new trace data is shown; the previous view remains on screen unchanged.`);
+      } else if (outcome.source === 'retryable') {
+        // The pipeline is REACHABLE; the public block explorers could not answer
+        // (rate-limited / timed out / down). This is transient and says nothing
+        // about the address, so it is never shown as "invalid address" or as a
+        // "no such wallet" conclusion — the user is told to RETRY.
+        setDataSource('pipeline_retryable');
+        setFailureKind(outcome.kind);
+        setDataNote(`${outcome.note} No new trace data is shown; the previous view remains on screen unchanged.`);
+      } else if (outcome.source === 'invalid_input') {
+        // The pipeline REJECTED the request (bad input) — a client problem, not
+        // a service failure and not a claim about the chain.
+        setDataSource('pipeline_invalid_input');
+        setFailureKind(null);
+        setDataNote(outcome.note);
       } else {
-        // outcome.source === 'fallback': no trace data — leave current trace
-        // state unchanged and surface an honest error. Never fabricate.
         setDataSource('pipeline_unavailable');
+        setFailureKind(null);
         setDataNote(outcome.note);
       }
     } catch (err) {
       console.error('Tracing error:', err);
       setDataSource('pipeline_unavailable');
+      setFailureKind(null);
       setDataNote('Unexpected error contacting the pipeline — check the browser console.');
     } finally {
       setIsTracing(false);
@@ -200,32 +241,44 @@ export default function App() {
           </div>
         )}
 
-        {/* Data source banner: pipeline (teal) / mock preset (amber) / pipeline unavailable (red) */}
-        <div className={`p-3 rounded-2xl border text-xs flex items-start gap-2 ${
-          dataSource === 'pipeline'
-            ? 'bg-teal-950/30 border-teal-800/60 text-teal-300'
-            : dataSource === 'pipeline_unavailable'
-              ? 'bg-rose-950/40 border-rose-700/60 text-rose-300'
-              : 'bg-amber-950/30 border-amber-800/60 text-amber-300'
-        }`}>
-          <Database className="w-4 h-4 mt-0.5 shrink-0" />
-          <div className="space-y-0.5">
-            <div className="font-bold uppercase tracking-wider">
-              {dataSource === 'pipeline'
-                ? 'Live pipeline output — real subgraph, rules, learned signal and correlation'
+        {/* Data source banner: only shown for live pipeline results or error notices.
+            Each failure state gets its OWN banner: a rate-limited/timed-out lookup is
+            transient and retryable, and must not be rendered as "invalid address",
+            "no such wallet", or "service down" (see AGENTS.md: never let one honest
+            failure mode masquerade as another). */}
+        {dataSource !== 'mock' && (
+          <div className={`p-3 rounded-2xl border text-xs flex items-start gap-2 ${
+            dataSource === 'pipeline'
+              ? 'bg-teal-950/30 border-teal-800/60 text-teal-300'
+              : dataSource === 'pipeline_retryable'
+                ? 'bg-amber-950/40 border-amber-700/60 text-amber-300'
                 : dataSource === 'pipeline_unavailable'
-                  ? '⚠ Pipeline unavailable — no trace data shown (no fabrication)'
-                  : 'Preset demonstration case — mock data, not live pipeline output'}
+                  ? 'bg-rose-950/40 border-rose-700/60 text-rose-300'
+                  : 'bg-amber-950/30 border-amber-800/60 text-amber-300'
+          }`}>
+            <Database className="w-4 h-4 mt-0.5 shrink-0" />
+            <div className="space-y-0.5">
+              <div className="font-bold uppercase tracking-wider">
+                {dataSource === 'pipeline'
+                  ? 'Live pipeline output — real subgraph, rules, learned signal and correlation'
+                  : dataSource === 'pipeline_empty'
+                    ? 'Pipeline answered — no trace exists for this address (no fabrication)'
+                    : dataSource === 'pipeline_incomplete'
+                      ? '⚠ Pipeline answered with an incomplete signal set — nothing shown (no fabrication)'
+                      : dataSource === 'pipeline_retryable'
+                        ? `⚠ Block explorers unavailable right now (${failureKind ?? 'transient failure'}) — nothing was concluded about this address; RETRY`
+                        : dataSource === 'pipeline_invalid_input'
+                          ? '⚠ Request rejected as invalid — nothing was looked up (not a service failure)'
+                          : '⚠ Pipeline unavailable — no trace data shown (no fabrication)'}
+              </div>
+              <p className="opacity-80">
+                {dataNote ?? (dataSource === 'pipeline'
+                  ? 'Evaluated for the reported wallet; subgraph members are shown structurally (Elliptic carries no BTC amounts, so monetary fields are 0, not fabricated).'
+                  : 'Start the Python service: cd backend && uvicorn ledgr.service:app --reload — then re-submit the address.')}
+              </p>
             </div>
-            <p className="opacity-80">
-              {dataNote ?? (dataSource === 'pipeline'
-                ? 'Evaluated for the reported wallet; subgraph members are shown structurally (Elliptic carries no BTC amounts, so monetary fields are 0, not fabricated).'
-                : dataSource === 'pipeline_unavailable'
-                  ? 'Start the Python service: cd backend && uvicorn ledgr.service:app --reload — then re-submit the address.'
-                  : 'Enter a wallet address above and click Analyze to run the real pipeline.')}
-            </p>
           </div>
-        </div>
+        )}
 
         {/* Active Investigation Case Banner */}
         <div className="bg-gradient-to-r from-[#121217] via-[#161622] to-[#121217] text-white p-4 rounded-2xl shadow-xl border border-zinc-800/80 flex flex-col md:flex-row md:items-center justify-between gap-4">

@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { CLUSTERS_FETCH_TIMEOUT_SECONDS, LIVE_FETCH_TIMEOUT_SECONDS, MEMPOOL_FETCH_TIMEOUT_SECONDS } from './src/config/constants';
+import { mapProxyFailure, mapMempoolFailure } from './proxyOutcome';
 
 dotenv.config();
 
@@ -115,8 +116,16 @@ Keep tone professional, strictly objective, and direct.`;
       try {
         const r = await fetch(`${pyBase}${path}`, { signal: controller.signal, ...init });
         if (!r.ok) {
+          // Keep the machine-readable body: the pipeline returns a structured
+          // `detail` ({kind, retryable, message}) for live-source failures, and
+          // without this the only way to tell "rate-limited" from "unreachable"
+          // would be the status code — which is exactly the ambiguity the
+          // hardening pass removed.
+          let body: any = null;
+          try { body = await r.json(); } catch { /* non-JSON error body */ }
           const err: any = new Error(`${path} -> ${r.status}`);
           err.status = r.status;
+          err.body = body;
           throw err;
         }
         return await r.json();
@@ -125,13 +134,31 @@ Keep tone professional, strictly objective, and direct.`;
       }
     };
 
+    // Cluster lookups must not fail the whole trace, but their failure must stay
+    // visible: 'no sourced exchange match' is a CONCLUSION, and we may only state
+    // it when the lookup actually completed. A failed lookup is reported as
+    // attribution_status: 'lookup-failed' so the UI can say "could not check"
+    // instead of "no match".
+    const clusterAttempt = (promise: Promise<any>, label: string) =>
+      promise.then(
+        (data: any) => ({ ok: true as const, data }),
+        (e: any) => {
+          if (e?.name === 'AbortError') throw e;
+          console.warn(
+            `[api/trace] ${label} lookup failed (${e?.status ?? e?.name ?? 'unknown'}) — ` +
+            `attribution conclusion unavailable; it will NOT be reported as "no match"`,
+          );
+          return { ok: false as const, status: e?.status ?? null };
+        },
+      );
+
     try {
       const fetchPromise = Promise.all([
         py('/trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: normAddress, hop_depth: hop }) }),
         py('/rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: normAddress, hop_depth: hop }) }),
         py('/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: normAddress }) }).catch((e) => { if (e.name === 'AbortError') throw e; return null; }),
         py('/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: normAddress, hop_depth: hop }) }),
-        py('/clusters').catch((e) => { if (e.name === 'AbortError') throw e; return null; }),
+        clusterAttempt(py('/clusters'), '/clusters'),
       ]);
 
       let globalTimeoutId: NodeJS.Timeout;
@@ -143,20 +170,31 @@ Keep tone professional, strictly objective, and direct.`;
         }, 55000);
       });
 
-      const [trace, rules, score, verdict, clusters] = await Promise.race([fetchPromise, globalTimeout]) as any;
+      const [trace, rules, score, verdict, clustersAttempt] = await Promise.race([fetchPromise, globalTimeout]) as any;
+      const clusters = clustersAttempt?.ok ? clustersAttempt.data : null;
+      // Default: the indexed cluster report WAS checked and had no match for this
+      // wallet. Flipped to 'lookup-failed' if either lookup could not complete.
+      let attributionStatus: 'matched' | 'no-match' | 'lookup-failed' =
+        clustersAttempt?.ok === false ? 'lookup-failed' : 'no-match';
 
       let seedCluster = clusters?.clusters?.find((c: any) =>
         (c.members_sample || []).includes(normAddress)
       );
+      if (seedCluster) attributionStatus = 'matched';
 
       if (!seedCluster && trace?.source === 'live-lookup') {
-        const liveClusters = await Promise.race([
-          py(`/clusters/live?address=${normAddress}`).catch((e) => { if (e.name === 'AbortError') throw e; return null; }),
+        const liveAttempt = await Promise.race([
+          clusterAttempt(py(`/clusters/live?address=${encodeURIComponent(normAddress)}`), '/clusters/live'),
           globalTimeout
         ]) as any;
-        seedCluster = liveClusters?.clusters?.find((c: any) =>
-          (c.members_sample || []).includes(normAddress)
-        );
+        if (liveAttempt?.ok === false) {
+          attributionStatus = 'lookup-failed';
+        } else {
+          seedCluster = liveAttempt?.data?.clusters?.find((c: any) =>
+            (c.members_sample || []).includes(normAddress)
+          );
+          if (seedCluster) attributionStatus = 'matched';
+        }
       }
       
       clearTimeout(globalTimeoutId!);
@@ -164,30 +202,22 @@ Keep tone professional, strictly objective, and direct.`;
       return res.json({
         source: 'pipeline',
         available: true,
-        data: { address: normAddress, hopDepth: hop, trace, rules, score, verdict, attribution: seedCluster?.attribution ?? null },
+        data: {
+          address: normAddress,
+          hopDepth: hop,
+          trace,
+          rules,
+          score,
+          verdict,
+          attribution: seedCluster?.attribution ?? null,
+          attribution_status: attributionStatus,
+        },
       });
     } catch (err: any) {
-      // A 404 from the pipeline means the wallet is simply not in the ingested
-      // Elliptic dataset — an honest, expected outcome (e.g. any real BTC
-      // address, since Elliptic nodes are anonymized tx-ids). This is NOT a
-      // service failure and must not trigger the offline-mock fallback.
-      if (err?.status === 404) {
-        return res.json({
-          source: 'pipeline',
-          available: true,
-          data: {
-            address: normAddress,
-            hopDepth: hop,
-            found: false,
-            note: 'Wallet not present in the ingested Elliptic dataset — no trace, rule signal, or verdict exists for it, and the learned signal reports it as classified:false (no risk is fabricated).',
-            score: { wallet: normAddress, classified: false, risk_score: null, prediction: null, learned_flag: false },
-          },
-        });
-      }
-      const note = err?.name === 'AbortError'
-        ? `Python pipeline timed out after ${LIVE_FETCH_TIMEOUT_SECONDS} s — no new trace data is shown; the previous view (if any) remains on screen unchanged. Check that the backend is still running and retry.`
-        : 'Python pipeline service unreachable — no new trace data is shown; the previous view (if any) remains on screen unchanged. Start the backend with: cd backend && uvicorn ledgr.service:app --reload';
-      return res.json({ source: 'fallback', available: false, note });
+      // The failure → envelope mapping lives in proxyOutcome.ts (pure, unit-tested
+      // in test/proxy-outcome.test.ts) because server.ts starts a listener on
+      // import and therefore cannot be imported by a test.
+      return res.json(mapProxyFailure(err, { address: normAddress, hopDepth: hop, timeoutSeconds: LIVE_FETCH_TIMEOUT_SECONDS }));
     }
   });
 
@@ -218,7 +248,13 @@ Keep tone professional, strictly objective, and direct.`;
     }
   });
 
-  // Live mempool query proxy (for real-time unconfirmed tx checking with fallback)
+  // Live mempool query proxy (for real-time unconfirmed tx checking).
+  //
+  // HONESTY CONTRACT (2026-09-26 hardening): a failed lookup is NOT
+  // "no unconfirmed transactions". It returns `success:false` with a
+  // machine-readable `reason`, and the client must show the reason instead of
+  // reporting a clean result. `success:true` with an empty list is the ONLY
+  // response that means "no unconfirmed transactions right now".
   app.get('/api/mempool/address/:address', async (req, res) => {
     const { address } = req.params;
     try {
@@ -226,7 +262,7 @@ Keep tone professional, strictly objective, and direct.`;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), MEMPOOL_FETCH_TIMEOUT_SECONDS * 1000);
       
-      const response = await fetch(`https://mempool.space/api/address/${address}/txs/mempool`, {
+      const response = await fetch(`https://mempool.space/api/address/${encodeURIComponent(address)}/txs/mempool`, {
         signal: controller.signal,
         headers: { 'Accept': 'application/json' }
       });
@@ -234,11 +270,23 @@ Keep tone professional, strictly objective, and direct.`;
 
       if (response.ok) {
         const txs = await response.json();
+        if (!Array.isArray(txs)) {
+          // A 200 that is not a transaction list is not usable data; say so
+          // rather than coercing it into "no transactions".
+          return res.json(mapMempoolFailure('api-error'));
+        }
         return res.json({ success: true, txs, live: true });
       }
-      return res.json({ success: false, txs: [], live: false, note: "No unconfirmed live mempool transactions or rate-limited" });
-    } catch (err) {
-      return res.json({ success: false, txs: [], live: false, note: "Live mempool service unavailable; using forensic simulated monitor" });
+      if (response.status === 429) {
+        return res.json(mapMempoolFailure('rate-limited', { status: 429 }));
+      }
+      return res.json(mapMempoolFailure('api-error', { status: response.status }));
+    } catch (err: any) {
+      const timedOut = err?.name === 'AbortError';
+      return res.json(mapMempoolFailure(
+        timedOut ? 'timeout' : 'unreachable',
+        { timeoutSeconds: MEMPOOL_FETCH_TIMEOUT_SECONDS },
+      ));
     }
   });
 

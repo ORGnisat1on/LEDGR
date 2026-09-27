@@ -129,6 +129,13 @@ LIVE_FETCH_TIMEOUT_SECONDS =  30
 # Elliptic time steps are ~2 weeks; live block timestamps are mapped to the same
 # granularity so the R3 time-window heuristics keep their documented semantics.
 LIVE_TIME_STEP_SECONDS = 14 * 24 * 3600
+# Hard cap on an accepted address string, checked LOCALLY before any network call
+# (address_format.classify_address) so an over-long paste can never reach a block
+# explorer or the graph/ML path. Mirrored as MAX_ADDRESS_INPUT_LENGTH in
+# src/config/constants.ts — keep both in sync if either side changes.
+# Longest real mainnet address form is 62 chars (bech32m P2WSH-length program);
+# 128 leaves headroom without allowing multi-KB payloads through.
+MAX_ADDRESS_INPUT_LENGTH = 128
 
 
 def live_tracing_enabled() -> bool:

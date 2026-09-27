@@ -80,7 +80,7 @@ export const BulkConvergenceView: React.FC<BulkConvergenceViewProps> = ({
     if (!isOpen) return;
     let cancelled = false;
     setLoading(true);
-    const API_URL = import.meta.env.VITE_API_URL || "";
+    const API_URL = (import.meta as any)?.env?.VITE_API_URL ?? "";
     fetch(`${API_URL}/api/clusters`)
       .then((r) => r.json())
       .then((data: ClustersPayload) => { if (!cancelled) setPayload(data); })

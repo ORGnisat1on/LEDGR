@@ -27,13 +27,18 @@ from .correlate import VERDICT_WATCH, correlate
 from .graph import load_graph_index, local_subgraph
 from .learn import load_feature_lookup, load_learned_model, predict_wallet
 from .live_graph import (
+    KIND_BAD_ADDRESS,
+    KIND_INVALID_ADDRESS_FORMAT,
+    NO_GRAPH_SOURCES,
+    SOURCE_INVALID_ADDRESS_FORMAT,
     SOURCE_LIVE,
-    SOURCE_NOT_FOUND_ON_CHAIN,
     LiveSourceError,
+    classify_live_failure,
     live_subgraph_payload,
     trace_live,
 )
 from .rules import run_rules
+from .address_format import classify_address
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +111,75 @@ def trace(req: TraceRequest) -> dict:
     return _trace_live_response(req.address, req.hop_depth)
 
 
+def _invalid_address_response(address: str, *, network_attempted: bool, detail: str = "") -> dict:
+    """200 answer: this input is not a usable mainnet address.
+
+    Deliberately its own source — NOT `not-found-on-chain` (we never established
+    anything about the chain for it) and NOT a 503 (nothing is wrong with any
+    service). `network_attempted` distinguishes the local format gate (no
+    request made) from the explorers' own rejection (both sources returned a
+    validity verdict).
+    """
+    if network_attempted:
+        note = (
+            f"Both block explorers rejected this address as not resolvable "
+            f"({detail}) — it does not resolve as a mainnet Bitcoin address. "
+            "This is a statement about the input, not about any transaction "
+            "history; no signal was computed."
+        )
+    else:
+        note = detail  # supplied by the local gate (already user-readable)
+    return {
+        "source": SOURCE_INVALID_ADDRESS_FORMAT,
+        "note": note,
+        "address": address,
+        "network_attempted": network_attempted,
+    }
+
+
+_RETRYABLE_KIND_MESSAGES = {
+    "rate-limited": (
+        "The public block explorers are rate-limiting this client (HTTP 429). "
+        "This says NOTHING about the address — no conclusion about it was "
+        "reached. Retry in about a minute."
+    ),
+    "timeout": (
+        "The block-explorer request timed out before an answer arrived. This "
+        "says NOTHING about the address — no conclusion about it was reached. "
+        "Retry; if you used a hop depth above 1, retrying at 1H is faster."
+    ),
+    "api-error": (
+        "The public block explorers returned an error (5xx/network failure). "
+        "This says NOTHING about the address. Retry later."
+    ),
+}
+
+
+def _live_error_to_http(exc: LiveSourceError) -> HTTPException:
+    """Map a LiveSourceError to HTTP 503 with a STRUCTURED, machine-readable detail.
+
+    `{source, kind, retryable, message}` lets the Node proxy pick the right
+    envelope (`retryable` + kind) instead of collapsing every non-404 into
+    "Python pipeline service unreachable". kind 'bad-address' never reaches
+    here — it is an answer, mapped by `_invalid_address_response`.
+    """
+    kind = exc.kind
+    message = _RETRYABLE_KIND_MESSAGES.get(
+        kind,
+        f"Live block-explorer lookup failed ({kind}): {exc}",
+    )
+    logger.warning("Live lookup unavailable (kind=%s): %s", kind, exc)
+    return HTTPException(
+        status_code=503,
+        detail={
+            "source": "live-unavailable",
+            "kind": kind,
+            "retryable": True,
+            "message": message,
+        },
+    )
+
+
 def _trace_live_response(address: str, hop_depth: int) -> dict:
     """Live-lookup path shared by /trace, /rules and /verdict (Phase R9)."""
     if not live_tracing_enabled():
@@ -116,20 +190,15 @@ def _trace_live_response(address: str, hop_depth: int) -> dict:
     try:
         outcome = trace_live(address, hop_depth)
     except LiveSourceError as e:
-        if e.kind == "bad-address":
-            # The explorers rejected the address itself: honest 'bad address'
-            # result — NOT a service failure (never collapsed into one message).
-            return {
-                "source": SOURCE_NOT_FOUND_ON_CHAIN,
-                "note": "Address is not valid / not recognized by the Bitcoin chain explorers — nothing to trace and no signal to compute.",
-                "address": address,
-            }
-        raise HTTPException(
-            status_code=503,
-            detail=f"Live block-explorer API failed (address is not in the indexed dataset): {e}",
-        ) from e
-    if outcome["source"] == SOURCE_NOT_FOUND_ON_CHAIN:
-        return {"source": SOURCE_NOT_FOUND_ON_CHAIN, "note": outcome["note"], "address": address}
+        if e.kind == KIND_BAD_ADDRESS:
+            # BOTH explorers returned a validity verdict: an honest answer about
+            # the input (200), never a 503 and never "no history".
+            return _invalid_address_response(address, network_attempted=True, detail=str(e))
+        raise _live_error_to_http(e) from e
+    if outcome.get("source") in NO_GRAPH_SOURCES:
+        # not-found-on-chain or invalid-address-format — both are answers that
+        # carry no graph; the note/format fields pass through verbatim.
+        return dict(outcome)
     G = outcome["graph"]
     return live_subgraph_payload(G, address, outcome["meta"])
 
@@ -144,18 +213,13 @@ def _live_rules(address: str, hop_depth: int) -> dict:
     try:
         outcome = trace_live(address, hop_depth)
     except LiveSourceError as e:
-        if e.kind == "bad-address":
-            return {
-                "source": SOURCE_NOT_FOUND_ON_CHAIN,
-                "note": "Address is not valid / not recognized by the Bitcoin chain explorers — nothing to trace and no signal to compute.",
-                "address": address,
-            }
-        raise HTTPException(
-            status_code=503,
-            detail=f"Live block-explorer API failed (address is not in the indexed dataset): {e}",
-        ) from e
-    if outcome["source"] == SOURCE_NOT_FOUND_ON_CHAIN:
-        return {"source": SOURCE_NOT_FOUND_ON_CHAIN, "note": outcome["note"], "address": address}
+        if e.kind == KIND_BAD_ADDRESS:
+            return _invalid_address_response(address, network_attempted=True, detail=str(e))
+        raise _live_error_to_http(e) from e
+    if outcome.get("source") in NO_GRAPH_SOURCES:
+        # Same passthrough as _trace_live_response — one shared shape, so /trace,
+        # /rules and /verdict can never disagree about what counts as an answer.
+        return dict(outcome)
     rules_out = run_rules(outcome["graph"], address, hop_depth=hop_depth)
     rules_out["source"] = SOURCE_LIVE
     rules_out["live_meta"] = outcome["meta"]
@@ -172,7 +236,7 @@ def _live_verdict(address: str, hop_depth: int) -> dict:
     enforced here explicitly, not assumed.
     """
     rules_out = _live_rules(address, hop_depth)
-    if rules_out.get("source") == SOURCE_NOT_FOUND_ON_CHAIN:
+    if rules_out.get("source") in NO_GRAPH_SOURCES:
         return rules_out
     learned_unavailable = {
         "wallet": address,
@@ -291,6 +355,24 @@ def clusters_live(address: str) -> dict:
             status_code=503,
             detail="Live tracing is disabled (set LEDGR_LIVE_TRACING=1 to enable).",
         )
+    # Local format gate — same one /trace uses, so malformed input becomes a 400
+    # (client problem) here instead of the previous "explorer fetch failed" 503,
+    # and never generates a network request.
+    fmt = classify_address(address)
+    if not fmt.valid:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "source": "invalid-input",
+                "kind": KIND_INVALID_ADDRESS_FORMAT,
+                "retryable": False,
+                "message": (
+                    f"Not a valid mainnet Bitcoin address ({fmt.reason}): {fmt.detail}. "
+                    "Checked locally before any network lookup — no block-explorer "
+                    "request was made."
+                ),
+            },
+        )
     try:
         internal_txs = list(
             BlockstreamClient().iter_address_internal_txs(
@@ -298,9 +380,14 @@ def clusters_live(address: str) -> dict:
             )
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Live block-explorer fetch failed for {address}: {e}",
+        # Classified like every other live call: a 429/timeout is retryable
+        # operational detail, never "fetch failed" soup.
+        raise _live_error_to_http(
+            LiveSourceError(
+                f"Live block-explorer fetch failed for {address}: {e}",
+                cause=e,
+                kind=classify_live_failure(e),
+            )
         ) from e
     live_clusters = build_live_clusters(internal_txs)
     return {

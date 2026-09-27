@@ -46,6 +46,21 @@ Victim-reported wallet address (input)
 
 **Explicit boundary:** this module does not continuously ingest the live blockchain. It ingests the static dataset once (batch, at training time) and queries live APIs only on-demand for a specific reported address at query time. MVP intake accepts one reported address per submission; accepting a batch of addresses in one submission (bulk tracing, `SCOPE.md` stretch goal) is a straightforward extension of this same on-demand query path run in a loop — it does not change the ingestion format.
 
+### On-demand live lookup: the failure vocabulary (hardened 2026-09-26)
+
+Arbitrary/real addresses are traced against two public block explorers (Blockstream, with BlockCypher as fallback). A third party being rate-limited, slow or down must never be reported as a fact about the investigated wallet, so the live path distinguishes six states end-to-end (Python `live_graph.py` → `service.py` → `proxyOutcome.ts` → `analyzer.ts` → `App.tsx`):
+
+| State | What actually happened | Reported as |
+|---|---|---|
+| `invalid-address-format` | Local, offline format gate rejected the paste (malformed, wrong network, overlong, non-ASCII). **No network request is made.** | 200 answer / 400 detail naming the input — a statement about the input, never about the chain |
+| `not-found-on-chain` | Both explorers answered "no transactions" for a syntactically valid address | 200 answer: no on-chain history, computed locally |
+| `bad-address` | **Both** explorers independently returned a validity verdict (400/404) | 200 answer: not a resolvable address |
+| `rate-limited` | HTTP 429 from either source (including the 429 + 404 mix) | 503 `{kind, retryable:true}` → proxy `retryable` → UI: "explorers unavailable, nothing concluded, RETRY" |
+| `timeout` | A source hung, or the proxy's own request timer fired | same retryable family, distinct `kind` |
+| `api-error` | 5xx / connection failure / unclassifiable | same retryable family, distinct `kind` |
+
+Two rules make this safe: (1) a verdict about an address requires **two independent** sources to agree — one throttled source plus one 404 is `rate-limited`, not "invalid"; (2) `rate-limited` / `timeout` / `api-error` may never be phrased as, or mapped into, an "invalid address" / "no history" conclusion. Regression tests for the whole matrix live in `backend/tests/test_live_failure_modes.py` and `test/pipeline-failure-modes.test.ts`.
+
 ---
 
 ## Module 1b — Watchlist Monitoring (IMPLEMENTED 2026-09-07)
@@ -56,7 +71,9 @@ Victim-reported wallet address (input)
 
 **Logic:** polls mempool.space at 30-second intervals per watchlisted address (respecting public API rate limits). For each address, fetches unconfirmed transactions from `/api/address/{address}/txs/mempool`, filters to transactions involving the watched address, derives direction (incoming/outgoing) by comparing watched address against vin/vout, calculates amount from satoshi values, determines counterparty from the opposite side of the transaction, computes fee rate (sat/vB) from fee/weight. No new inference — pure lookup against known list.
 
-**Outputs:** per-address alert state (`{wallet, prior_verdict, tx_hash, direction, amount_btc, amount_inr, detected_at, fee_rate_sat_vb, counterparty_address, status: unconfirmed_mempool}`) with three distinct UI states: "monitoring, no activity" (normal), "error fetching" (network/rate-limit), "alert detected" (live unconfirmed tx). Relative timestamps update live while modal is open.
+**Outputs:** per-address alert state (`{wallet, prior_verdict, tx_hash, direction, amount_btc, amount_inr, detected_at, fee_rate_sat_vb, counterparty_address, status: unconfirmed_mempool}`) with three distinct UI states: "monitoring, no activity" (normal), "check failed (reason) — status unknown" (network/rate-limit), "alert detected" (live unconfirmed tx). Relative timestamps update live while modal is open.
+
+**Honesty invariant (hardened 2026-09-26):** "no activity" may be shown **only** when a poll actually succeeded and returned zero transactions. A rate-limited, timed-out or unreachable poll returns `success:false` with a machine-readable `reason` (`rate-limited` | `timeout` | `api-error` | `unreachable`) and must instead: show the reason with "status unknown", keep any previously raised alert (a failed poll may not delete a real signal), and leave the "last successful check" timestamp untouched. Rationale: before this, a `429` was folded into the same branch as an empty mempool, so a throttled poll was displayed as a clean result.
 
 **Explicit boundary:** this module only watches addresses already on the watchlist (i.e., previously run through Modules 2–4 at least once). It does not ingest the full mempool or the full chain, and it does not predict that a wallet is *about to* transact before any transaction exists — it detects a broadcast transaction before confirmation, which is a materially different and much smaller claim. See `SCOPE.md` for why true predictive forecasting is logged separately as future work, not part of this module.
 

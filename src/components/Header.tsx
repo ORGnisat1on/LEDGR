@@ -48,8 +48,10 @@ export const Header: React.FC<HeaderProps> = ({
             <span>Intake</span>
           </button>
 
-          {/* Temporarily hidden: WatchlistMonitor triggers a crash bug (setState-in-render / infinite useEffect loop).
-              Not in DEMO.md judge walkthrough script.
+          {/* Watchlist (Module 1b) trigger. Re-enabled 2026-09-27: the component was
+              hidden behind this comment after it hit a render loop; that loop is fixed
+              (see WatchlistMonitor.tsx — polling-state effect no longer depends on the
+              state it sets), so the live mempool monitor is reachable again. */}
           <button
             id="btn-open-watchlist"
             onClick={onOpenWatchlist}
@@ -67,7 +69,6 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             )}
           </button>
-          */}
 
           <button
             id="btn-open-convergence"

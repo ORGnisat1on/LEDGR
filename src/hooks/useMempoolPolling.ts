@@ -35,11 +35,31 @@ export interface MempoolTx {
   };
 }
 
+/**
+ * Why the live mempool answer is UNKNOWN for a poll. These describe the REQUEST
+ * (transient service problems), never the address's activity level — a failed
+ * lookup must never be presented as "no unconfirmed transactions".
+ */
+export type MempoolUnavailableReason = 'rate-limited' | 'timeout' | 'api-error' | 'unreachable';
+
+const MEMPOOL_REASON_LABEL: Record<MempoolUnavailableReason, string> = {
+  'rate-limited': 'the public mempool service rate-limited the request',
+  'timeout': 'the public mempool service did not respond in time',
+  'api-error': 'the public mempool service returned an error',
+  'unreachable': 'the public mempool service is unreachable',
+};
+
 export interface MempoolApiResponse {
   success: boolean;
   txs: MempoolTx[];
   live: boolean;
   note?: string;
+  /**
+   * Present when `success` is false: WHY the answer is unknown. The proxy
+   * guarantees `success:false` means "could not check", never "nothing found".
+   */
+  reason?: MempoolUnavailableReason;
+  retryable?: boolean;
 }
 
 export interface UnconfirmedAlert {
@@ -57,6 +77,12 @@ export interface MempoolPollingState {
   alert: UnconfirmedAlert | null;
   isLoading: boolean;
   error: string | null;
+  /** Machine-readable cause behind `error`, for UI copy that must not guess. */
+  unavailableReason: MempoolUnavailableReason | null;
+  /**
+   * Timestamp of the last poll that ACTUALLY SUCCEEDED. A failed poll does not
+   * update it, so the UI can never present unknown data as fresh.
+   */
   lastPolledAt: number | null;
 }
 
@@ -71,6 +97,81 @@ interface UseMempoolPollingOptions {
 const SATOSHIS_PER_BTC = 100_000_000;
 const DEFAULT_INTERVAL_MS = 30_000; // 30 seconds - respectful of mempool.space rate limits
 const DEFAULT_BTC_TO_INR = 894800; // approximate rate, can be overridden
+
+/**
+ * The part of the poll state machine that decides what a poll RESPONSE does to
+ * the current state — extracted as a pure function so the honesty invariant can
+ * be regression-tested without a DOM (the repo has no jsdom / react-test-renderer,
+ * and adding a test framework is out of scope for this change).
+ *
+ * The hook below calls this directly, so the tested function IS the shipped
+ * logic, not a re-implementation of it.
+ */
+export interface MempoolStateCore {
+  alert: UnconfirmedAlert | null;
+  error: string | null;
+  unavailableReason: MempoolUnavailableReason | null;
+  /** Timestamp of the last SUCCESSFUL poll. */
+  lastPolledAt: number | null;
+}
+
+export interface MempoolPollTransition {
+  alert: UnconfirmedAlert | null;
+  error: string | null;
+  unavailableReason: MempoolUnavailableReason | null;
+  lastPolledAt: number | null;
+  /** True only for a poll that actually succeeded; drives data freshness. */
+  ok: boolean;
+  /** Transactions the hook must still scan for a new alert (empty on failure). */
+  txs: MempoolTx[];
+}
+
+const UNKNOWN_SUFFIX =
+  'Unconfirmed activity is UNKNOWN for this poll; this is NOT a "no unconfirmed transactions" result.';
+
+export function applyMempoolPoll(
+  prev: MempoolStateCore,
+  payload: any,
+  now: number,
+): MempoolPollTransition {
+  // A body we cannot read is not an empty mempool.
+  if (!payload || typeof payload !== 'object') {
+    return {
+      ...prev,
+      error: 'Live mempool service returned an unreadable response — unconfirmed activity is UNKNOWN for this poll. This is NOT a "no unconfirmed transactions" result.',
+      unavailableReason: 'api-error',
+      ok: false,
+      txs: [],
+    };
+  }
+
+  // HONESTY GATE: `success:false` means "could not check", never "nothing found".
+  // It must not clear an alert (that would delete a real signal) and must not
+  // advance the freshness timestamp (unknown data is not fresh data).
+  if (payload.success === false) {
+    const reason: MempoolUnavailableReason = payload.reason ?? 'api-error';
+    return {
+      ...prev,
+      error: `Live mempool check unavailable — ${MEMPOOL_REASON_LABEL[reason]}. ${UNKNOWN_SUFFIX} Any previously detected alert is kept until a poll succeeds.`,
+      unavailableReason: reason,
+      ok: false,
+      txs: [],
+    };
+  }
+
+  const txs: MempoolTx[] = Array.isArray(payload.txs) ? payload.txs : [];
+  // A successful poll is the ONLY case that may clear a raised alert (a genuine
+  // "no unconfirmed transactions" answer) and the only case that advances
+  // data freshness.
+  return {
+    alert: txs.length === 0 ? null : prev.alert,
+    error: null,
+    unavailableReason: null,
+    lastPolledAt: now,
+    ok: true,
+    txs,
+  };
+}
 
 /**
  * Custom hook for polling mempool.space via our proxy endpoint for unconfirmed transactions
@@ -90,6 +191,7 @@ export function useMempoolPolling({
   const [alert, setAlert] = useState<UnconfirmedAlert | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unavailableReason, setUnavailableReason] = useState<MempoolUnavailableReason | null>(null);
   const [lastPolledAt, setLastPolledAt] = useState<number | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -117,9 +219,10 @@ export function useMempoolPolling({
     abortControllerRef.current = new AbortController();
     setIsLoading(true);
     setError(null);
+    setUnavailableReason(null);
 
     try {
-      const API_URL = import.meta.env.VITE_API_URL || "";
+      const API_URL = (import.meta as any)?.env?.VITE_API_URL ?? "";
       const response = await fetch(`${API_URL}/api/mempool/address/${encodeURIComponent(address)}`, {
         signal: abortControllerRef.current.signal,
         headers: { 'Accept': 'application/json' },
@@ -131,22 +234,40 @@ export function useMempoolPolling({
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const data: MempoolApiResponse = await response.json();
-      setLastPolledAt(Date.now());
+      const data: MempoolApiResponse = await response.json().catch(() => null);
 
-      if (!data.success || !data.txs || data.txs.length === 0) {
-        // No unconfirmed transactions - this is the normal case
-        if (alert !== null) {
-          setAlert(null);
-        }
+      // Single decision point: applyMempoolPoll owns the honesty invariant
+      // (a failed poll must not clear a raised alert and must not advance the
+      // freshness timestamp). It is pure and exported so it can be tested
+      // directly — see the 429 regression tests in test/mempool-poll.test.ts.
+      const next = applyMempoolPoll(
+        { alert, error, unavailableReason, lastPolledAt },
+        data,
+        Date.now(),
+      );
+      if (!mountedRef.current) return;
+
+      setError(next.error);
+      setUnavailableReason(next.unavailableReason);
+      if (next.ok) setLastPolledAt(next.lastPolledAt);
+
+      if (!next.ok) {
+        // Keep the existing alert on purpose: a throttled/failed poll deleting a
+        // real unconfirmed-tx signal is the bug this gate exists to prevent.
         return;
       }
+      if (next.alert === null && alert !== null) {
+        // The ONLY case in which a previously raised alert may be cleared: a
+        // successful poll that found no unconfirmed transactions.
+        setAlert(null);
+      }
+      if (next.txs.length === 0) return;
 
       // Process transactions to find ones involving our watched address
       // For each tx, determine if it's incoming or outgoing relative to the watched address
       const watchedAddrLower = address.toLowerCase();
 
-      for (const tx of data.txs) {
+      for (const tx of next.txs) {
         let isIncoming = false;
         let isOutgoing = false;
         let amountSats = 0;
@@ -214,8 +335,15 @@ export function useMempoolPolling({
     } catch (err) {
       if (!mountedRef.current) return;
       if (err instanceof Error && err.name === 'AbortError') return;
+      // A transport-level failure is also "unknown", not "no activity": keep the
+      // last known alert and do NOT advance the freshness timestamp.
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      setError(msg);
+      const timedOut = msg.toLowerCase().includes('abort');
+      setUnavailableReason(timedOut ? 'timeout' : 'unreachable');
+      setError(
+        `Live mempool check failed (${msg}) — unconfirmed activity is UNKNOWN for this poll; ` +
+        `this is NOT a "no unconfirmed transactions" result. Any previously detected alert is kept.`,
+      );
       // Don't clear existing alert on error - keep showing last known state
     } finally {
       if (mountedRef.current) {
@@ -252,6 +380,7 @@ export function useMempoolPolling({
     alert,
     isLoading,
     error,
+    unavailableReason,
     lastPolledAt,
   };
 }

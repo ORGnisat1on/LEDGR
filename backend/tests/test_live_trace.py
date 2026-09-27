@@ -43,11 +43,20 @@ def _tx(txid: str, ins: list[str], outs: list[str], block_time: int) -> dict:
 
 T0 = 1_700_000_000  # fixed epoch for reproducible time steps
 
+# Fixture seeds must be format-valid MAINNET addresses (the local format gate in
+# trace_live rejects anything else before it would touch a fetcher — that is the
+# point of the gate; see tests/test_address_format.py for the full vector set).
+# Counterparties inside fixtures are explorer-supplied data, not user input, so
+# they are deliberately not validated. The genesis address is a genuine P2PKH
+# mainnet address whose checksum the validator independently verifies.
+SEED_P2PKH = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+SEED_P2SH = "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy"
+
 # A peel-chain-like structure: seed receives funding, then forwards onward —
 # each hop one input address → one output address, out-degree exactly 1.
 PEEL_TXS = {
-    "genesis": [_tx("t1", ["miner"], ["seedAddr"], T0)],
-    "seedAddr": [_tx("t2", ["seedAddr"], ["a1"], T0 + 3600)],
+    "genesis": [_tx("t1", ["miner"], [SEED_P2PKH], T0)],
+    SEED_P2PKH: [_tx("t2", [SEED_P2PKH], ["a1"], T0 + 3600)],
     "a1": [_tx("t3", ["a1"], ["a2"], T0 + 7200)],
     "a2": [_tx("t4", ["a2"], ["a3"], T0 + 10800)],
     "a3": [],
@@ -65,8 +74,8 @@ def test_extract_addresses_excludes_coinbase_and_op_return():
 
 
 def test_build_live_graph_structure_and_attrs():
-    G = build_live_graph("seedAddr", PEEL_TXS)
-    assert "seedAddr" in G and G.has_edge("seedAddr", "a1")
+    G = build_live_graph(SEED_P2PKH, PEEL_TXS)
+    assert SEED_P2PKH in G and G.has_edge(SEED_P2PKH, "a1")
     assert G.has_edge("a1", "a2") and G.has_edge("a2", "a3")
     # labels are always unknown (-1) for live addresses; time_step mapped from block time
     assert all(G.nodes[n]["label"] == -1 for n in G.nodes)
@@ -75,8 +84,8 @@ def test_build_live_graph_structure_and_attrs():
 
 def test_rules_engine_runs_on_live_graph():
     """R3 heuristics run unchanged on the ad-hoc live graph (they need no training data)."""
-    G = build_live_graph("seedAddr", PEEL_TXS)
-    out = run_rules(G, "seedAddr", mixer_ids=set(), hop_depth=2)
+    G = build_live_graph(SEED_P2PKH, PEEL_TXS)
+    out = run_rules(G, SEED_P2PKH, mixer_ids=set(), hop_depth=2)
     assert out["rule_score"] >= 0
     assert set(out["rules_fired"]) <= {"peel_chain", "rapid_fan_out", "mixer_adjacent"}
 
@@ -88,35 +97,36 @@ def test_trace_live_low_tx_address():
         calls.append(addr)
         return PEEL_TXS.get(addr, [])
 
-    out = trace_live("seedAddr", hop_depth=1, fetcher=fetcher)
+    out = trace_live(SEED_P2PKH, hop_depth=1, fetcher=fetcher)
     assert out["source"] == live_graph.SOURCE_LIVE
-    assert calls == ["seedAddr"]  # hop_depth=1 -> no counterparty fetches
+    assert calls == [SEED_P2PKH]  # hop_depth=1 -> no counterparty fetches
     assert out["meta"]["capped"] is False
 
 
 def test_trace_live_high_volume_address_capped():
     """A Binance-scale address (60 txs) is truncated to the documented cap — honestly flagged."""
-    many = [_tx(f"t{i}", ["funder"], ["seedAddr", f"out{i}"], T0) for i in range(60)]
+    many = [_tx(f"t{i}", ["funder"], [SEED_P2PKH, f"out{i}"], T0) for i in range(60)]
 
     def fetcher(addr):
         return many
 
-    out = trace_live("seedAddr", hop_depth=1, fetcher=fetcher, max_txs=10)
-    assert out["meta"]["txs_by_address_fetched"]["seedAddr"] == 10
+    out = trace_live(SEED_P2PKH, hop_depth=1, fetcher=fetcher, max_txs=10)
+    assert out["meta"]["txs_by_address_fetched"][SEED_P2PKH] == 10
     assert out["meta"]["capped"] is True
 
 
 def test_trace_live_fetch_cap_respected():
     """hop_depth>1 expands counterparties but never exceeds the fetch cap."""
     # seed fans out to 40 counterparties, each with one tx back to new addresses
+    fmt_seed = SEED_P2SH
     txs = {
-        "seed": [
-            _tx(f"s{i}", ["funding"], ["seed", f"c{i:02d}"], T0) for i in range(40)
+        fmt_seed: [
+            _tx(f"s{i}", ["funding"], [fmt_seed, f"c{i:02d}"], T0) for i in range(40)
         ],
     }
     for i in range(40):
         c = f"c{i:02d}"
-        txs[c] = [_tx(f"c{i:02d}tx", ["seed"], [f"d{i:02d}"], T0)]
+        txs[c] = [_tx(f"c{i:02d}tx", [fmt_seed], [f"d{i:02d}"], T0)]
 
     calls = []
 
@@ -124,16 +134,21 @@ def test_trace_live_fetch_cap_respected():
         calls.append(addr)
         return txs.get(addr, [])
 
-    out = trace_live("seed", hop_depth=3, fetcher=fetcher, max_fetches=5)
+    out = trace_live(fmt_seed, hop_depth=3, fetcher=fetcher, max_fetches=5)
     assert len(calls) <= 5  # hard cap enforced (1 seed + up to 4 counterparties)
     assert out["meta"]["capped"] is True
 
 
 def test_trace_live_nonexistent_address_is_not_found_on_chain():
+    # BIP-173's mainnet P2WPKH example: FORMAT-valid, but the injected fetcher
+    # returns zero txs, so the honest outcome is "no on-chain history". An
+    # invalid-format string never gets this far (see test_live_failure_modes.py).
+    VALID_NO_HISTORY = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+
     def fetcher(addr):
         return []
 
-    out = trace_live("bc1qnonexistent", hop_depth=2, fetcher=fetcher)
+    out = trace_live(VALID_NO_HISTORY, hop_depth=2, fetcher=fetcher)
     assert out["source"] == SOURCE_NOT_FOUND_ON_CHAIN
     assert "no on-chain" in out["note"]
 
@@ -144,8 +159,10 @@ def test_trace_live_api_failure_raises_live_source_error():
     def fetcher(addr):
         raise requests.ConnectionError("both explorers down")
 
-    with pytest.raises(LiveSourceError):
-        trace_live("seedAddr", hop_depth=1, fetcher=fetcher)
+    with pytest.raises(LiveSourceError) as exc_info:
+        trace_live(SEED_P2PKH, hop_depth=1, fetcher=fetcher)
+    # A connection failure is operational (unknown-cause), never "bad address".
+    assert exc_info.value.kind == "api-error"
 
 
 # --- service-level (fetcher monkeypatched; TestClient against real artifacts) ---
@@ -243,8 +260,11 @@ def test_service_verdict_live_capped_at_watch(monkeypatch):
     assert "watch" in body["correlation_cap"] or "capped" in body["correlation_cap"]
 
 
-def test_service_live_bad_address_is_not_found_not_503(monkeypatch):
-    """An invalid address (explorer 4xx) is an honest bad-address result (200), never a 503."""
+def test_service_live_bad_address_is_invalid_answer_not_503(monkeypatch):
+    """An explorer-side rejection (both sources 400/404) is an honest answer
+    about the INPUT — 200 with its own source — never a 503 and never the
+    'no on-chain history' bucket. (Updated from the pre-hardening contract,
+    where this answered not-found-on-chain.)"""
     client = _make_client(monkeypatch)
     monkeypatch.setenv("LEDGR_LIVE_TRACING", "1")
 
@@ -254,11 +274,15 @@ def test_service_live_bad_address_is_not_found_not_503(monkeypatch):
     monkeypatch.setattr(svc, "trace_live", fake_trace_live)
     r = client.post("/trace", json={"address": "not-a-valid-address", "hop_depth": 1})
     assert r.status_code == 200
-    assert r.json()["source"] == "not-found-on-chain"
+    body = r.json()
+    assert body["source"] == "invalid-address-format"
+    assert body["network_attempted"] is True
 
 
 def test_service_live_api_failure_is_503(monkeypatch):
-    """A live-API failure is distinct from not-found: 503 with a live-specific detail."""
+    """A live-API failure is distinct from not-found: 503 with a STRUCTURED
+    detail so the caller can map the failure mode (kind + retryable) instead of
+    collapsing it. (Updated: detail is now a machine-readable dict.)"""
     client = _make_client(monkeypatch)
     monkeypatch.setenv("LEDGR_LIVE_TRACING", "1")
 
@@ -268,7 +292,12 @@ def test_service_live_api_failure_is_503(monkeypatch):
     monkeypatch.setattr(svc, "trace_live", fake_trace_live)
     r = client.post("/trace", json={"address": "bc1qanything", "hop_depth": 1})
     assert r.status_code == 503
-    assert "Live block-explorer API failed" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert detail["kind"] == "api-error"
+    assert detail["retryable"] is True
+    assert "NOTHING about the address" in detail["message"]
+    # The whole point: the message must never claim the address is the problem.
+    assert "address is not" not in detail["message"].lower()
 
 
 # --- /clusters/live endpoint (R10 wiring) ------------------------------------
@@ -307,7 +336,11 @@ def test_service_clusters_live_endpoint(monkeypatch):
         lambda self, address, max_txs=None: iter(fake_internal_txs),
     )
 
-    r = client.get("/clusters/live", params={"address": "addr_a"})
+    # The query must be a format-valid mainnet address: clusters_live checks the
+    # format gate before touching the network, so a synthetic id like "addr_a"
+    # would be rejected with a 400 before the monkeypatched client is called.
+    SEED_CLUSTER = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+    r = client.get("/clusters/live", params={"address": SEED_CLUSTER})
     assert r.status_code == 200, r.text
     body = r.json()
 
@@ -343,6 +376,25 @@ def test_service_clusters_live_disabled(monkeypatch):
     """/clusters/live returns 503 when LEDGR_LIVE_TRACING=0."""
     client = _make_client(monkeypatch)
     monkeypatch.setenv("LEDGR_LIVE_TRACING", "0")
-    r = client.get("/clusters/live", params={"address": "addr_a"})
+    r = client.get("/clusters/live", params={"address": SEED_P2PKH})
     assert r.status_code == 503
     assert "disabled" in r.json()["detail"].lower()
+
+
+def test_service_clusters_live_bad_format_is_400_not_503(monkeypatch):
+    """Malformed input to /clusters/live is a 400 (client problem), never the
+    previous 'explorer fetch failed' 503 — it never reaches the network."""
+    from unittest.mock import MagicMock
+
+    client = _make_client(monkeypatch)
+    monkeypatch.setenv("LEDGR_LIVE_TRACING", "1")
+    spy = MagicMock(side_effect=AssertionError("network must not be touched"))
+    monkeypatch.setattr(
+        "ledgr.service.BlockstreamClient.iter_address_internal_txs", spy
+    )
+    r = client.get("/clusters/live", params={"address": "not-an-address!!"})
+    assert r.status_code == 400
+    # Canonical vocabulary: the same string the 200 answer body uses, so a
+    # malformed paste is named identically wherever it surfaces.
+    assert r.json()["detail"]["kind"] == "invalid-address-format"
+    spy.assert_not_called()

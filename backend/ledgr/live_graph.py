@@ -12,9 +12,19 @@ most. This module closes that gap, per BACKEND_BUILD_PLAN.md Phase R9:
 - `build_live_graph` constructs an ad-hoc address-level DiGraph from the fetched
   summaries with the same node-attribute conventions as `graph.build_graph`
   (label / time_step), so the R3 rule engine runs on it unchanged.
-- Failure modes are distinct and never collapse: an address with no on-chain
-  history is `not-found-on-chain`; a live-API failure raises `LiveSourceError`
-  (surfaced as 503, never as a silent "unavailable").
+- Failure modes are distinct and never collapse (hardened 2026-09-26):
+    * malformed input          -> SOURCE_INVALID_ADDRESS_FORMAT (local format
+      validation, NO network call, checked before any explorer request);
+    * address with no history  -> SOURCE_NOT_FOUND_ON_CHAIN (both explorers
+      answered 200 with zero txs — real signal, an honest answer);
+    * explorers rejected it    -> LiveSourceError kind 'bad-address' (BOTH
+      sources returned a 4xx validity verdict — never inferred from one source);
+    * rate-limited (HTTP 429)  -> LiveSourceError kind 'rate-limited';
+    * request timed out        -> LiveSourceError kind 'timeout';
+    * explorer outage (5xx etc)-> LiveSourceError kind 'api-error'.
+  The last three are operational, retryable states surfaced as HTTP 503 with a
+  structured detail — they are NEVER reported as "address not found/invalid"
+  (the 2026-09-26 429->bad-address mislabel this pass exists to prevent).
 
 The learned signal (R4) has no feature vector for a live-fetched address and
 stays honestly `classified: false` — the verdict for any live-looked-up wallet
@@ -28,7 +38,9 @@ from __future__ import annotations
 import logging
 
 import networkx as nx
+import requests
 
+from .address_format import classify_address
 from .config import (
     LIVE_MAX_COUNTERPARTY_FETCHES,
     LIVE_MAX_NODES,
@@ -40,6 +52,25 @@ logger = logging.getLogger(__name__)
 
 SOURCE_LIVE = "live-lookup"
 SOURCE_NOT_FOUND_ON_CHAIN = "not-found-on-chain"
+# Input that fails mainnet format validation BEFORE any network call (and, via
+# LiveSourceError kind 'bad-address', input both explorers independently reject).
+# Distinct from NOT_FOUND: no lookup happened (or the explorers refused the
+# input), so "no on-chain history" would be a claim we did not establish.
+SOURCE_INVALID_ADDRESS_FORMAT = "invalid-address-format"
+# Sources that describe the INPUT or its absence of history — i.e. an answer,
+# not a service failure. Any outcome with one of these carries no graph.
+NO_GRAPH_SOURCES = frozenset({SOURCE_NOT_FOUND_ON_CHAIN, SOURCE_INVALID_ADDRESS_FORMAT})
+
+# LiveSourceError kinds — one per distinct external-response class. Priority
+# rules when both sources fail live in _classify_pair_failure().
+KIND_RATE_LIMITED = "rate-limited"   # HTTP 429 from either source (unknown-cause state)
+KIND_TIMEOUT = "timeout"             # request hung/timed out (unknown-cause state)
+KIND_BAD_ADDRESS = "bad-address"     # BOTH sources returned a 4xx validity verdict
+KIND_API_ERROR = "api-error"         # 5xx / connection failure / anything else
+# The local, offline format gate rejected the input before any network call.
+# Deliberately the same string as SOURCE_INVALID_ADDRESS_FORMAT so a malformed
+# paste is named identically wherever it surfaces (200 answer body and 400 detail).
+KIND_INVALID_ADDRESS_FORMAT = SOURCE_INVALID_ADDRESS_FORMAT
 
 
 class LiveSourceError(Exception):
@@ -48,11 +79,16 @@ class LiveSourceError(Exception):
     Distinct from 'address has no on-chain history' — that is an honest result
     (SOURCE_NOT_FOUND_ON_CHAIN), not an error. `kind` separates failure modes
     so they never collapse into one message:
-      - 'api-error': the live source itself failed (timeout/5xx/network)
-      - 'bad-address': the explorers rejected the address as invalid (4xx)
+      - 'rate-limited': HTTP 429 — the explorer throttled us; says NOTHING
+        about the address. Retryable.
+      - 'timeout': the request hung until the client timeout; says NOTHING
+        about the address. Retryable.
+      - 'bad-address': BOTH explorers returned a 4xx validity verdict —
+        the address itself was rejected (not a service failure, not retryable).
+      - 'api-error': 5xx / connection failure / unexpected response.
     """
 
-    def __init__(self, message: str, cause: Exception | None = None, kind: str = "api-error"):
+    def __init__(self, message: str, cause: Exception | None = None, kind: str = KIND_API_ERROR):
         super().__init__(message)
         self.cause = cause
         self.kind = kind
@@ -169,48 +205,87 @@ def live_subgraph_payload(G: nx.DiGraph, seed: str, meta: dict) -> dict:
     return {"nodes": nodes, "edges": edges, "stats": stats, "source": SOURCE_LIVE, **meta}
 
 
+def classify_live_failure(exc: BaseException) -> str:
+    """Map ONE source's terminal failure to a LiveSourceError kind.
+
+    Order matters: Timeout first (requests.Timeout has no .response and must
+    never fall into the HTTP-status branches), then 429, then only the narrow
+    statuses that constitute a validity verdict about the address (400 bad
+    format / 404 unknown). 401/403 (auth/quota) and other 4xx are operational,
+    never "the address is invalid".
+    """
+    if isinstance(exc, requests.Timeout):          # includes Connect/Read timeouts
+        return KIND_TIMEOUT
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 429:
+        return KIND_RATE_LIMITED
+    if status in (400, 404):
+        # A validity verdict in isolation — NOT yet proof of an invalid address;
+        # _classify_pair_failure requires BOTH sources to agree.
+        return KIND_BAD_ADDRESS
+    return KIND_API_ERROR
+
+
+def _classify_pair_failure(bs_kind: str, bc_kind: str) -> str:
+    """Combine both sources' failure kinds when NEITHER returned data.
+
+    Priority (the 2026-09-26 429->bad-address mislabel is fixed here):
+      1. rate-limited — either source throttled us, so no verdict about the
+                        address was established; NEVER report bad-address.
+      2. timeout      — either source hung: also an unknown-cause state.
+      3. bad-address  — ONLY if both sources independently returned a validity
+                        verdict (400/404).
+      4. api-error    — anything else (5xx, connection failure, mixed cases).
+
+    Mixed cases fixed by these rules (asserted by test_live_failure_modes.py):
+      429 + 404 -> rate-limited (not bad-address);
+      400 + timeout -> timeout;   400 + 404 -> bad-address;
+      500 + 400 -> api-error;     429 + 429 -> rate-limited.
+    """
+    if KIND_RATE_LIMITED in (bs_kind, bc_kind):
+        return KIND_RATE_LIMITED
+    if KIND_TIMEOUT in (bs_kind, bc_kind):
+        return KIND_TIMEOUT
+    if bs_kind == KIND_BAD_ADDRESS and bc_kind == KIND_BAD_ADDRESS:
+        return KIND_BAD_ADDRESS
+    return KIND_API_ERROR
+
+
 def _default_fetcher(address: str) -> list[dict]:
     """Fetch tx summaries for one address: Blockstream primary, BlockCypher fallback.
 
-    Raises LiveSourceError (api-error kind) only when BOTH sources fail — a
-    single-source failure must degrade, not abort. Raises LiveSourceError with
-    kind 'not-found-on-chain' is NOT used here: an empty tx list is returned as-is.
+    Failover contract: ONE source failing (429, timeout, 5xx, network error)
+    degrades to the other — a single-source failure never aborts the request and
+    never becomes a verdict about the address. Only when BOTH sources fail is
+    `LiveSourceError` raised, with `kind` decided by `_classify_pair_failure`.
+    An empty tx list is returned as-is (the caller maps it to not-found-on-chain).
     """
-    import requests
-
     from .blockcypher_client import BlockCypherClient
     from .blockstream_client import BlockstreamClient
 
     try:
         return BlockstreamClient().get_address_txs(address)
-    except requests.HTTPError as bs_err:
-        status = bs_err.response.status_code if bs_err.response is not None else 0
-        try:
-            return BlockCypherClient().get_address_full(address).get("txs", [])
-        except Exception as bc_err:
-            # Both sources 4xx'd => the address itself is invalid (bad-address);
-            # anything else is a genuine api-error. Never collapse the two.
-            bc_resp = getattr(bc_err, "response", None)
-            both_4xx = 400 <= status < 500 and (
-                bc_resp is not None and bc_resp.status_code < 500
-            )
-            raise LiveSourceError(
-                f"Both live sources rejected/failed for {address} "
-                f"(blockstream: {bs_err}; blockcypher: {bc_err})",
-                cause=bc_err,
-                kind="bad-address" if both_4xx else "api-error",
-            ) from bc_err
-    except requests.RequestException as bs_err:
-        logger.warning("Blockstream fetch failed for %s (%s) — falling back to BlockCypher",
-                       address, bs_err)
-        try:
-            return BlockCypherClient().get_address_full(address).get("txs", [])
-        except Exception as bc_err:  # both sources down — a genuine api-error
-            raise LiveSourceError(
-                f"Both live sources failed for {address} "
-                f"(blockstream: {bs_err}; blockcypher: {bc_err})",
-                cause=bc_err,
-            ) from bc_err
+    except Exception as bs_exc:
+        bs_kind = classify_live_failure(bs_exc)
+        # NOTE: `except ... as bs_exc` unbinds the name when the block exits, so
+        # the detail is copied out here for use after the handler. (A stray
+        # UnboundLocalError in the message path would be classified as an
+        # api-error and hide the real failure kind — exactly the collapse this
+        # pass removes, so it is asserted by the pair-classification tests.)
+        bs_detail = str(bs_exc)
+        logger.warning("Blockstream failed for %s (%s: %s) — falling back to BlockCypher",
+                       address, bs_kind, bs_detail)
+
+    try:
+        return BlockCypherClient().get_address_full(address).get("txs", [])
+    except Exception as bc_exc:
+        bc_kind = classify_live_failure(bc_exc)
+        raise LiveSourceError(
+            f"Both live sources failed for {address} "
+            f"(blockstream: {bs_kind} — {bs_detail}; blockcypher: {bc_kind} — {bc_exc})",
+            cause=bc_exc,
+            kind=_classify_pair_failure(bs_kind, bc_kind),
+        ) from bc_exc
 
 
 def has_onchain_history(address: str) -> bool:
@@ -219,15 +294,19 @@ def has_onchain_history(address: str) -> bool:
     Uses the stats endpoint (1 request) so an unused/unknown address is
     reported honestly without spending calls on its tx list. Falls back to
     checking the fetched tx list if the stats call is unsupported upstream.
+    (Currently unused by the pipeline; classified like every other live call so
+    a future caller cannot inherit a 429/timeout-as-api-error collapse.)
     """
-    import requests
-
     from .blockstream_client import BlockstreamClient
 
     try:
         return BlockstreamClient().get_address_stats(address)["tx_count"] > 0
     except requests.RequestException as e:
-        raise LiveSourceError(f"Live source stats check failed for {address}: {e}", cause=e) from e
+        raise LiveSourceError(
+            f"Live source stats check failed for {address}: {e}",
+            cause=e,
+            kind=classify_live_failure(e),
+        ) from e
 
 
 def trace_live(address: str, hop_depth: int,
@@ -238,9 +317,33 @@ def trace_live(address: str, hop_depth: int,
     Returns {"graph": nx.DiGraph, "txs_by_address": ..., "meta": {...}} where
     meta reports every cap honestly (capped flags + counts). Raises
     LiveSourceError on live-API failure; an address with zero on-chain txs
-    returns source=not-found-on-chain instead of a graph.
+    returns source=not-found-on-chain instead of a graph; input that fails
+    mainnet format validation returns source=invalid-address-format WITHOUT any
+    network request (checked first — see address_format.classify_address).
     """
     address = str(address)
+
+    # Local format gate — runs BEFORE any explorer request, so a malformed paste
+    # can never be rate-limited, can never reach the network, and can never be
+    # reported as "no on-chain history". Only the SEED (the user-supplied input)
+    # is validated; counterparties come from the explorers' own responses and are
+    # not user input, so they are not re-judged against our validator.
+    fmt = classify_address(address)
+    if not fmt.valid:
+        logger.info("Rejecting address locally (format=%s): %s", fmt.reason, fmt.detail)
+        return {
+            "source": SOURCE_INVALID_ADDRESS_FORMAT,
+            "note": (
+                f"Not a valid mainnet Bitcoin address ({fmt.reason}): {fmt.detail}. "
+                "Checked locally before any network lookup — no block-explorer request "
+                "was made and no signal was computed for this input."
+            ),
+            "address": address,
+            "format_reason": fmt.reason,
+            "format_detail": fmt.detail,
+            "network_attempted": False,
+        }
+
     fetcher = fetcher or _default_fetcher
 
     def _fetch(addr: str) -> list[dict]:
@@ -249,18 +352,23 @@ def trace_live(address: str, hop_depth: int,
         except LiveSourceError:
             raise
         except Exception as e:
-            # A 4xx from the explorer means the address itself is invalid —
-            # an honest 'bad address' result, not a service outage.
-            kind = "bad-address"
-            resp = getattr(e, "response", None)
-            if resp is None or resp.status_code >= 500:
-                kind = "api-error"
-            raise LiveSourceError(f"live fetch failed for {addr}: {e}", cause=e, kind=kind) from e
+            # Classify instead of defaulting: a 429 or a timeout from a custom
+            # fetcher must NOT become 'bad-address' (the 2026-09-26 mislabel
+            # class). Only a genuine 400/404 explorer verdict qualifies.
+            raise LiveSourceError(
+                f"live fetch failed for {addr}: {e}",
+                cause=e,
+                kind=classify_live_failure(e),
+            ) from e
 
     txs = _fetch(address)[:max_txs]
     if not txs:
-        return {"source": SOURCE_NOT_FOUND_ON_CHAIN,
-                "note": "Address has no on-chain transaction history (unknown or unused address) — nothing to trace and no signal to compute."}
+        return {
+            "source": SOURCE_NOT_FOUND_ON_CHAIN,
+            "note": "Address has no on-chain transaction history (unknown or unused address) — nothing to trace and no signal to compute.",
+            "address": address,
+            "network_attempted": True,
+        }
 
     txs_by_address: dict[str, list[dict]] = {address: txs}
     fetch_count = 1

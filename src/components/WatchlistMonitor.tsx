@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, Radio, AlertTriangle, Clock, ShieldAlert, ArrowUpRight, ArrowDownLeft, CheckCircle2, ExternalLink, WifiOff, Activity, Loader2 } from 'lucide-react';
 import { WatchlistItem } from '../types';
-import { useMempoolPolling, UnconfirmedAlert } from '../hooks/useMempoolPolling';
+import { useMempoolPolling, UnconfirmedAlert, MempoolUnavailableReason } from '../hooks/useMempoolPolling';
 
 interface WatchlistMonitorProps {
   isOpen: boolean;
@@ -31,6 +31,11 @@ interface AddressPollingState {
   alert: UnconfirmedAlert | null;
   isLoading: boolean;
   error: string | null;
+  /**
+   * Why the last poll could not check. Non-null means the status cell must say
+   * "unknown" rather than "no activity" (a rate limit is not a clean result).
+   */
+  unavailableReason: MempoolUnavailableReason | null;
   lastPolledAt: number | null;
 }
 
@@ -41,43 +46,63 @@ export const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
   onTraceAddress,
   onDismissAlert
 }) => {
-  if (!isOpen) return null;
-
+  // RULES-OF-HOOKS FIX (2026-09-27): the `if (!isOpen) return null` early return used
+  // to sit ABOVE these hooks, so the component ran a different number of hooks
+  // depending on whether the modal was open. That is what produced the
+  // "Too many re-renders. React limits the number of renders to prevent an
+  // infinite loop." crash the moment a user opened the monitor (and why a
+  // teammate hid the trigger). All hooks now run unconditionally and the
+  // early return happens after them.
+  //
   // Current time for live relative timestamps - updates every 10s while modal open
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
+    if (!isOpen) return; // no ticker while the monitor is closed
     const interval = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isOpen]);
 
   // Polling state per address
   const [pollingStates, setPollingStates] = useState<Map<string, AddressPollingState>>(new Map());
 
-  // Start polling for each watchlist address
+  // Keep one polling-state entry per watchlist address, preserving any alert that
+  // has already been raised for an address that is still watched.
+  //
+  // RENDER-LOOP FIX (2026-09-27): this effect previously depended on
+  // `pollingStates` while calling `setPollingStates` with a freshly-built Map.
+  // Because the Map identity changed on every call, the effect re-ran forever
+  // (setState -> render -> new Map -> effect) — the "infinite useEffect loop" that
+  // made a teammate hide this feature's trigger. Two changes stop it:
+  //   1. depend on `watchlist` only (the state is read through the updater), and
+  //   2. return the SAME Map when the watched address set is unchanged, so React
+  //      bails out instead of scheduling another render.
   useEffect(() => {
-    const newStates = new Map<string, AddressPollingState>();
+    setPollingStates(prev => {
+      const next = new Map<string, AddressPollingState>();
 
-    for (const item of watchlist) {
-      // Initialize with current state or defaults
-      const existing = pollingStates.get(item.address);
-      newStates.set(item.address, {
-        address: item.address,
-        alert: existing?.alert ?? null,
-        isLoading: existing?.isLoading ?? false,
-        error: existing?.error ?? null,
-        lastPolledAt: existing?.lastPolledAt ?? null,
-      });
-    }
-
-    // Remove states for addresses no longer in watchlist
-    for (const [addr] of pollingStates) {
-      if (!watchlist.some(w => w.address === addr)) {
-        // Could clean up, but keeping for now in case address is re-added
+      for (const item of watchlist) {
+        const existing = prev.get(item.address);
+        next.set(item.address, {
+          address: item.address,
+          alert: existing?.alert ?? null,
+          isLoading: existing?.isLoading ?? false,
+          error: existing?.error ?? null,
+          unavailableReason: existing?.unavailableReason ?? null,
+          lastPolledAt: existing?.lastPolledAt ?? null,
+        });
       }
-    }
 
-    setPollingStates(newStates);
-  }, [watchlist, pollingStates]);
+      // Same addresses as before (the common case: nothing added/removed) →
+      // keep the previous Map identity so React skips the re-render entirely.
+      let unchanged = next.size === prev.size;
+      if (unchanged) {
+        for (const key of next.keys()) {
+          if (!prev.has(key)) { unchanged = false; break; }
+        }
+      }
+      return unchanged ? prev : next;
+    });
+  }, [watchlist]);
 
   // Update polling state from hook results
   const updatePollingState = (address: string, update: Partial<AddressPollingState>) => {
@@ -97,9 +122,50 @@ export const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
     updatePollingState(address, { alert, isLoading: false, error: null });
   }, []);
 
-  const handlePollingTick = useMemo(() => (address: string, state: { isLoading: boolean; error: string | null; lastPolledAt: number | null }) => {
-    updatePollingState(address, { ...state, alert: pollingStates.get(address)?.alert ?? null });
-  }, [pollingStates]);
+  // RENDER-LOOP FIX (2026-09-27): this was memoized on `pollingStates`, so it got a
+  // new identity on every poll tick. `MempoolPoller` lists `onTick` in its effect
+  // deps, so each new identity re-fired the tick -> setState -> re-render cycle.
+  // The existing alert is now read from the updater instead of a captured value, so
+  // the memo can have stable, empty deps (and unknown addresses / no-op ticks
+  // return the previous Map so React bails out).
+  const handlePollingTick = useMemo(() => (address: string, state: { isLoading: boolean; error: string | null; unavailableReason: MempoolUnavailableReason | null; lastPolledAt: number | null }) => {
+    setPollingStates(prev => {
+      const current = prev.get(address);
+      if (!current) return prev;
+      // The tick never carries an alert: keep whatever is already raised.
+      const merged: AddressPollingState = { ...current, ...state, alert: current.alert };
+      const unchanged =
+        merged.isLoading === current.isLoading &&
+        merged.error === current.error &&
+        merged.unavailableReason === current.unavailableReason &&
+        merged.lastPolledAt === current.lastPolledAt;
+      if (unchanged) return prev;
+      const next = new Map<string, AddressPollingState>(prev);
+      next.set(address, merged);
+      return next;
+    });
+  }, []);
+
+  // STABLE POLLER CALLBACKS FIX (2026-09-27): the per-address callbacks used to be
+  // built inline in the JSX — `onAlert={handleAlert(item.address)}` — which creates a
+  // NEW function identity on every parent render. `useMempoolPolling` keeps `onAlert`
+  // in its `poll` useCallback deps, and `poll` is a dep of the polling effect, so
+  // every parent re-render tore down and restarted the 30 s timer and re-polled
+  // immediately; each tick updated parent state, which re-rendered, which looped.
+  // That is the "infinite useEffect loop" that crashed the monitor on open.
+  // Building the closures once per watchlist (memoised on already-stable deps) keeps
+  // each poller's props referentially stable.
+  const pollerCallbacks = useMemo(() => {
+    const map = new Map<string, { onAlert: (a: UnconfirmedAlert) => void; onTick: (s: any) => void }>();
+    for (const item of watchlist) {
+      const address = item.address;
+      map.set(address, {
+        onAlert: (alert: UnconfirmedAlert) => handleAlert(address)(alert),
+        onTick: (state: any) => handlePollingTick(address, state),
+      });
+    }
+    return map;
+  }, [watchlist, handleAlert, handlePollingTick]);
 
   // Separate hook calls per address - React hooks must be called at top level
   // We'll use a different pattern: render a child component per address that uses the hook
@@ -112,6 +178,10 @@ export const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
     const state = pollingStates.get(w.address);
     return !!state?.alert;
   });
+
+  // All hooks above have now run unconditionally (rules of hooks). Only now may
+  // a closed monitor render nothing.
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
@@ -283,10 +353,17 @@ export const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
                       );
                       statusClass = 'border-rose-500/30';
                     } else if (error) {
+                      // The poll could not complete: say WHY and that the state is
+                      // unknown. It must never read as "no activity" (an empty
+                      // emerald "Idle / Monitoring" would be a fabricated clean
+                      // result — the exact defect this branch exists to prevent).
+                      const reasonLabel = state?.unavailableReason
+                        ? ` (${state.unavailableReason})`
+                        : '';
                       statusContent = (
                         <span className="inline-flex items-center gap-1 text-amber-400 text-[11px]" title={error}>
                           <WifiOff className="w-3.5 h-3.5 text-amber-400" />
-                          ERROR FETCHING
+                          CHECK FAILED{reasonLabel} — STATUS UNKNOWN
                         </span>
                       );
                       statusClass = 'border-amber-500/30';
@@ -308,10 +385,14 @@ export const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
                       statusClass = 'border-emerald-500/30';
                     }
 
-                    // Show last polled time for transparency
+                    // Show last SUCCESSFUL poll time for transparency. A failed
+                    // poll deliberately does not update it, so this can never
+                    // imply that unknown data is fresh.
                     const lastPolledStr = lastPolled
-                      ? `Last checked: ${formatRelativeTime(new Date(lastPolled).toISOString(), now)}`
-                      : 'Not yet polled';
+                      ? `Last successful check: ${formatRelativeTime(new Date(lastPolled).toISOString(), now)}`
+                      : (error
+                        ? 'Never checked successfully yet — status unknown'
+                        : 'Not yet polled');
 
                     return (
                       <tr key={item.address} className={`hover:bg-[#141419] transition-colors ${statusClass}`}>
@@ -353,14 +434,18 @@ export const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
           </div>
 
           {/* Per-address polling components - each uses the hook */}
-          {watchlist.map(item => (
-            <MempoolPoller
-              key={item.address}
-              address={item.address}
-              onAlert={handleAlert(item.address)}
-              onTick={handlePollingTick(item.address)}
-            />
-          ))}
+          {watchlist.map(item => {
+            const cbs = pollerCallbacks.get(item.address);
+            if (!cbs) return null;
+            return (
+              <MempoolPoller
+                key={item.address}
+                address={item.address}
+                onAlert={cbs.onAlert}
+                onTick={cbs.onTick}
+              />
+            );
+          })}
         </div>
       </div>
     </div>
@@ -371,11 +456,11 @@ export const WatchlistMonitor: React.FC<WatchlistMonitorProps> = ({
 interface MempoolPollerProps {
   address: string;
   onAlert: (alert: UnconfirmedAlert) => void;
-  onTick: (state: { isLoading: boolean; error: string | null; lastPolledAt: number | null }) => void;
+  onTick: (state: { isLoading: boolean; error: string | null; unavailableReason: MempoolUnavailableReason | null; lastPolledAt: number | null }) => void;
 }
 
 const MempoolPoller: React.FC<MempoolPollerProps> = ({ address, onAlert, onTick }) => {
-  const { alert, isLoading, error, lastPolledAt } = useMempoolPolling({
+  const { alert, isLoading, error, unavailableReason, lastPolledAt } = useMempoolPolling({
     address,
     enabled: true,
     intervalMs: 30_000,
@@ -384,8 +469,8 @@ const MempoolPoller: React.FC<MempoolPollerProps> = ({ address, onAlert, onTick 
 
   // Sync state back to parent via callback
   React.useEffect(() => {
-    onTick({ isLoading, error, lastPolledAt });
-  }, [isLoading, error, lastPolledAt, onTick]);
+    onTick({ isLoading, error, unavailableReason, lastPolledAt });
+  }, [isLoading, error, unavailableReason, lastPolledAt, onTick]);
 
   return null; // This component only manages polling, doesn't render anything
 };
