@@ -187,3 +187,33 @@ Code existed and unit tests passed, but the feature never reached the screen. Ro
 | `npm run build` | ✅ clean |
 
 **Flagged:** no error boundary exists anywhere in the app, so any future render throw blanks the entire page — that is why this class of bug was hard to diagnose. Adding one is out of scope here but worth considering.
+
+---
+
+## 2026-09-27 — Render deployability addendum
+
+Three areas investigated; **two were genuine bugs, one was already correct** (plus a third bug found while investigating it).
+
+| Area | Verdict | Evidence |
+|---|---|---|
+| Hardcoded port | **Genuine bug, fixed** | `const PORT = 3000` → `Number(process.env.PORT) \|\| 3000`. Render injects `PORT` (documented default 10000). Prod boot with `PORT=5000` → "listening on 5000"; netstat confirmed :5000. |
+| `demo_cache.json` path | **Genuine bug, fixed** | `npm start` runs `dist/server.mjs` so `__dirname` = `<root>/dist` → old lookup `<root>/dist/src/data/demo_cache.json`; `ls` proved it does not exist and `dist/` holds only index.html/assets/server.mjs. Cache silently empty in production. Now resolved via 3 candidates; prod boot logged "Loaded demo_cache.json (4 presets)" and `[CACHE HIT]` returned 500 nodes for preset `1A1zP1eP5…`. |
+| `NODE_ENV` switch | **Already correct — left untouched** | Prod: `mode=production (serving dist/)`, `GET /` returns the built hashed bundle (`assets/index-Bph5OwlM.js`). Dev: `mode=development (Vite middleware)`. The code's check matches Render, which documents `NODE_ENV=production` as **runtime only**. |
+| *(found while investigating)* top-level `vite` import | **Genuine bug, fixed** | The bundle had `import { createServer as createViteServer } from "vite"` at line 6 — a devDependency evaluated at boot, so `npm ci --omit=dev` died with `ERR_MODULE_NOT_FOUND` in a mode that never uses Vite. Now `await import("vite")` inside the dev branch; the built bundle has no top-level vite import. |
+
+**Additional verifications**
+
+| Check | Result |
+|---|---|
+| `NODE_ENV=production PORT=5000 npm run build` | ✅ clean; bundle no longer statically imports vite |
+| Non-preset address in production mode | ✅ `230425980` → `source:pipeline`, `trace.source=elliptic-indexed`, 5 nodes, verdict `watch`; uvicorn log shows /trace /rules /score /verdict 200 |
+| Missing demo cache must not crash | ✅ Bundle run outside the repo (node_modules junction, unlinked with `rmdir` afterwards): warns with all 3 tried paths, `demo_cache entries=0`, **still listens**; preset address then returned a real `live-lookup` (85 nodes) with 0 cache hits |
+| Any other hardcoded port in code | ✅ none — only the intentional `\|\| 3000` fallback and one test comment |
+| `npx tsc --noEmit` | ✅ clean |
+| Node suites | ✅ 53 passed / 9 suites |
+| `cd backend && python -m pytest tests -q` | ✅ 119 passed |
+| Dev mode after making the import dynamic | ✅ `mode=development (Vite middleware)`, Vite boots |
+
+**New file:** `DEPLOY.md` — env vars for both Render services (with `PORT`/`NODE_ENV` marked "do not set"), the demo-cache path logic, and a copy-pasteable production-mode smoke test.
+
+**Not verifiable locally:** whether Render applies *dashboard-set* env vars at build time (docs confirm the default `NODE_ENV` is runtime-only but not the user-set case); git-LFS artifact pulls on Render; cold-start timing.

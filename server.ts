@@ -2,7 +2,11 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
+// NOTE: `vite` is deliberately NOT imported here. It is a devDependency, and a
+// top-level static import of it is evaluated when the bundle boots — which made a
+// production-only install (`npm ci --omit=dev`) crash with ERR_MODULE_NOT_FOUND
+// even though Vite is never used in production. It is now imported dynamically
+// inside startLocalServer().
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { CLUSTERS_FETCH_TIMEOUT_SECONDS, LIVE_FETCH_TIMEOUT_SECONDS, MEMPOOL_FETCH_TIMEOUT_SECONDS } from './src/config/constants';
@@ -15,12 +19,47 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// Demo cache: precomputed traces for the preset/case-study addresses.
+//
+// PATH NOTE (2026-09-27): this used to be read from `path.join(__dirname, 'src',
+// 'data', 'demo_cache.json')` alone. That is correct for `npm run dev` (tsx runs
+// server.ts from the project root, so __dirname IS the root) but WRONG for
+// `npm start`: the esbuild bundle lives at dist/server.mjs, so __dirname is
+// <root>/dist and it looked for <root>/dist/src/data/demo_cache.json, which the
+// Vite build never creates. The file was silently missing in production — the
+// try/catch swallowed it and every preset address fell through to a live Python
+// lookup. Candidates are tried in order so the same code works unbundled, bundled
+// and when launched from a different working directory.
+const DEMO_CACHE_CANDIDATES = [
+  path.join(__dirname, 'src', 'data', 'demo_cache.json'),        // dev: tsx server.ts from root
+  path.join(__dirname, '..', 'src', 'data', 'demo_cache.json'),   // prod: dist/server.mjs -> root
+  path.join(process.cwd(), 'src', 'data', 'demo_cache.json'),     // launched from the root
+];
+
 let demoCache: any = {};
-try {
-  const cachePath = path.join(__dirname, 'src', 'data', 'demo_cache.json');
-  demoCache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-} catch (e) {
-  console.warn('Could not load demo_cache.json. Demo presets will fallback to live Python backend.', e);
+{
+  const tried: string[] = [];
+  for (const candidate of DEMO_CACHE_CANDIDATES) {
+    tried.push(candidate);
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      demoCache = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      console.log(`Loaded demo_cache.json (${Object.keys(demoCache).length} presets) from ${candidate}`);
+      break;
+    } catch (e) {
+      console.warn(`Could not parse demo_cache.json at ${candidate}`, e);
+    }
+  }
+  if (Object.keys(demoCache).length === 0) {
+    // Visible in Render's log stream. The documented, intended behaviour is a
+    // graceful fallback: demoCache stays {} and preset addresses simply miss the
+    // cache and are traced live against the Python backend. It must never throw
+    // or take the service down.
+    console.warn(
+      'Could not load demo_cache.json. Demo presets will fallback to live Python backend. Tried:\n  ' +
+      tried.join('\n  '),
+    );
+  }
 }
 
 app.use(express.json({ limit: '10mb' }));
@@ -292,8 +331,32 @@ Keep tone professional, strictly objective, and direct.`;
 
 // Vite middleware in dev or static files in production
 async function startLocalServer() {
-  const PORT = 3000;
-  if (process.env.NODE_ENV !== "production") {
+  // Render (and most PaaS providers) inject PORT and route the load balancer to
+  // whatever it says — Render's documented default is 10000. Hardcoding 3000 here
+  // meant the process listened on a port nothing was forwarding to, so every
+  // request 502'd. PORT is always a *string* in the environment, hence Number().
+  const PORT = Number(process.env.PORT) || 3000;
+  const isProduction = process.env.NODE_ENV === "production";
+
+  // Logged explicitly: Render shows stdout/stderr in its log stream, so this is
+  // how you confirm at a glance which mode the service booted in and where it is
+  // actually listening (and whether demo_cache.json was found).
+  console.log(
+    `[startup] NODE_ENV=${process.env.NODE_ENV ?? "(unset)"} -> mode=${isProduction ? "production (serving dist/)" : "development (Vite middleware)"}; ` +
+    `PORT=${process.env.PORT ?? "(unset)"} -> listening on ${PORT}; ` +
+    `PYTHON_API_URL=${process.env.PYTHON_API_URL ?? "(unset, using http://localhost:8000)"}; ` +
+    `demo_cache entries=${Object.keys(demoCache).length}`,
+  );
+
+  if (!isProduction) {
+    // DYNAMIC import on purpose. A static top-level `import ... from "vite"`
+    // made the production bundle import a devDependency at startup, so a
+    // production-only install (`npm ci --omit=dev`, which is what npm does when
+    // NODE_ENV=production is set) crashed with ERR_MODULE_NOT_FOUND before
+    // serving anything — even though Vite is never used in production mode.
+    // esbuild keeps this external (--packages=external); it is only evaluated
+    // when this branch actually runs.
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

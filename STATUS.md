@@ -498,3 +498,68 @@ $ npm run build                                # Vite + esbuild clean
 - The fee rate for the detected broadcast renders as `0 sat/vB` — real mempool.space summary data for that unconfirmed tx, not fabricated, but worth a look if the demo calls attention to it.
 - `proxyOutcome.ts` (the server-side half of the 429 fix) is still **untracked/uncommitted**.
 - No error boundary exists anywhere in the app: any future render throw blanks the whole page. Adding one was deliberately out of scope here, but it is the reason this class of bug was so hard to diagnose.
+
+---
+
+## 2026-09-27 — Render deployability: port, demo_cache path, NODE_ENV (all three investigated, two were real bugs)
+
+**Per-area verdict, stated up front:** the hardcoded port was a **genuine bug (fixed)**; the `demo_cache.json` path was a **genuine bug (fixed)**; `NODE_ENV` handling was **already correct and left untouched** — but investigation turned up a *third* real bug in the same area (a top-level `vite` import that breaks production-only installs), which I also fixed.
+
+**What changed**
+- `server.ts` — `const PORT = 3000` → `const PORT = Number(process.env.PORT) || 3000`. Render injects `PORT` (documented default **10000**), so the old code listened on 3000, a port nothing was forwarding to.
+- `server.ts` — `demo_cache.json` is now resolved from an ordered list of candidate paths (`__dirname/src/…` → `__dirname/../src/…` → `process.cwd()/src/…`) instead of `__dirname` alone, and the resolved path is logged.
+- `server.ts` — the top-level `import { createServer as createViteServer } from "vite"` is now a **dynamic** `await import("vite")` inside the dev-only branch. `vite` is a devDependency, and a static import is evaluated at bundle boot, so a production-only install died with `ERR_MODULE_NOT_FOUND` before serving anything — in a mode that never uses Vite.
+- `server.ts` — one `[startup]` log line recording resolved mode, port, `PYTHON_API_URL` and demo-cache entry count, so a Render deploy can be diagnosed from the log stream alone.
+- `DEPLOY.md` [NEW] — every env var for both services, the `NODE_ENV`/`PORT` guidance, the demo-cache path logic, and a local production-mode smoke test.
+- `PYTHON_API_URL` handling, the mempool/proxy failure mapping, hop-depth/timeout values and the watchlist code were **not touched**.
+
+**Verified how** (all against the running stack, not reasoned about)
+```
+# 1. PORT — real bug, confirmed and fixed
+   before: "const PORT = 3000"                    after: "Number(process.env.PORT) || 3000"
+   prod boot with PORT=5000 -> "listening on 5000"; netstat shows :3000 (old dev) and :5000 (prod bundle)
+   Render's documented default is 10000, so the old value guaranteed 502s.
+   grep for 3000 in code: only the intentional `|| 3000` fallback + one test comment.
+
+# 2. demo_cache.json — real bug, confirmed on DISK (not assumed)
+   npm start runs dist/server.mjs, so __dirname = <root>/dist
+   old lookup -> <root>/dist/src/data/demo_cache.json
+   ls: "No such file or directory"; dist/ contains only index.html, assets/, server.mjs(.map)
+   => the try/catch swallowed it, demoCache stayed {}, and EVERY preset address fell
+      through to a live Python lookup in production.
+   after, prod boot log:
+     Loaded demo_cache.json (4 presets) from C:\...\ledgr\src\data\demo_cache.json
+     [startup] ... mode=production (serving dist/); PORT=5000 -> listening on 5000; demo_cache entries=4
+   cache hit re-verified in production mode:
+     POST /api/trace 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa -> source=pipeline, 500 nodes
+     server log: "[CACHE HIT] Serving precomputed data for preset: 1A1zP1eP5…"
+
+# 3. NODE_ENV switch — verified working, no code change needed for the switch itself
+   prod:  "[startup] NODE_ENV=production -> mode=production (serving dist/)"
+          GET / returns the BUILT index (assets/index-Bph5OwlM.js), not the dev HTML
+   dev:   "[startup] NODE_ENV=(unset) -> mode=development (Vite middleware)"  (Vite boots fine
+          after the import was made dynamic)
+
+# 4. Non-preset address in production mode
+   POST /api/trace 230425980 -> source=pipeline, trace.source=elliptic-indexed, 5 nodes, verdict=watch
+   uvicorn log confirms /trace /rules /score /verdict all 200 from the proxy.
+
+# 5. Missing demo cache must degrade, not crash (tested in isolation, repo untouched)
+   bundle copied outside the repo (node_modules junction, removed with rmdir afterwards)
+   -> "Could not load demo_cache.json … Tried: <3 paths>"  (console.warn => visible in Render logs)
+   -> "demo_cache entries=0"  -> "Server running on http://0.0.0.0:5001"   (did not throw)
+   -> preset address on that instance: 0 cache hits, real live-lookup (85 nodes). Fallback works.
+
+# 6. Third bug found while investigating #3
+   npm install                     -> added 43 packages   (dev deps included)
+   NODE_ENV=production npm install -> added  1 package    (dev deps OMITTED)
+   bundle before: line 6 `import { createServer as createViteServer } from "vite";`
+   bundle after:  no top-level vite import; only `await import("vite")` inside the dev branch
+
+# Regression: tsc clean | Node 53 passed / 9 suites | Python 119 passed
+```
+
+**Still open / requires an actual Render deployment to confirm**
+- **Render's `NODE_ENV` default is documented as "runtime only"**, so on Render's native Node runtime the switch works with no configuration. I could **not** confirm from Render's docs whether a *dashboard-set* env var also applies at build time. Recommendation in `DEPLOY.md`: rely on the documented default and **do not** set `NODE_ENV` yourself; if you do, use `npm ci --include=dev && npm run build`.
+- **Not yet exercised on Render:** git-LFS artifact pulls for the Python service (verify `graph_index.pkl` / `learned_model.joblib` are real files in the build, not LFS pointers), cold-start timing, and the exact `PYTHON_API_URL` value once both services have hostnames.
+- `demo_cache.json` is ~795 KB and committed; if a diskless build ever prunes it, presets fall back to live tracing (verified safe) but lose instant results.
